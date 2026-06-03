@@ -1,0 +1,1881 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EOR viewer — UBS</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --red:#e60000;
+    --bg:#ffffff;
+    --bg-soft:#fafafa;
+    --bg-hover:#f4f6f9;
+    --bg-active:#fff5d6;
+    --fg:#1a1a1a;
+    --fg-soft:#555555;
+    --fg-mute:#888888;
+    --line:#e4e4e4;
+    --head-bg:#1a1a1a;
+    --head-fg:#ffffff;
+    --head-line:#2a2a2a;
+    --link-bg:#fff7e0;  --link-bd:#c97a00;
+    --direct-bg:#e8f5ec; --direct-bd:#1a8c3a;
+    --na-bg:#f0f0f0;     --na-bd:#888;
+    --chip-bg:#fff7e0;   --chip-bd:#e6cd66;
+    --chip-fg:#5a4500;
+  }
+  html[data-theme="dark"]{
+    --red:#ff5252;
+    --bg:#0e1116;
+    --bg-soft:#161a21;
+    --bg-hover:#1e242e;
+    --bg-active:#3a3220;
+    --fg:#e6e6e6;
+    --fg-soft:#a0a8b5;
+    --fg-mute:#6f7886;
+    --line:#262c36;
+    --head-bg:#000000;
+    --head-fg:#e6e6e6;
+    --head-line:#1a1f27;
+    --link-bg:#3a2f0e;  --link-bd:#d39e44;
+    --direct-bg:#0e2d1a; --direct-bd:#4cc77f;
+    --na-bg:#262c36;     --na-bd:#7f8896;
+    --chip-bg:#2a2412;   --chip-bd:#5a4a1e;
+    --chip-fg:#e4cd84;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%; overflow:hidden}
+  body{
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background:var(--bg); color:var(--fg); font-size:13px;
+    display:flex; flex-direction:column;
+    transition: background .25s, color .25s;
+  }
+  header{
+    background:var(--bg); border-bottom:1px solid var(--line);
+    padding:14px 20px; display:flex; align-items:center; gap:20px; flex-shrink:0;
+  }
+  .brand{display:flex; align-items:baseline; gap:14px}
+  .brand .logo{font-weight:700; color:var(--red); font-size:18px; letter-spacing:2px}
+  .brand h1{font-size:14px; font-weight:600; color:var(--fg)}
+  .brand .sub{font-size:11px; color:var(--fg-mute); font-style:italic}
+  .right-tools{margin-left:auto; display:flex; align-items:center; gap:10px}
+  .btn{
+    border:1px solid var(--line); background:var(--bg); color:var(--fg);
+    padding:7px 14px; font-size:12px; font-weight:500; cursor:pointer; border-radius:3px;
+    font-family:inherit; transition:all .15s;
+  }
+  .btn:hover{background:var(--bg-hover); border-color:var(--fg-mute)}
+  .btn[disabled]{opacity:.4; cursor:not-allowed}
+  input[type=search], input[type=text]{
+    border:1px solid var(--line); padding:6px 10px; font-size:12px;
+    border-radius:3px; font-family:inherit; background:var(--bg); color:var(--fg);
+  }
+  input[type=search]:focus, input[type=text]:focus{ outline:none; border-color:var(--red) }
+  input[type=file]{display:none}
+  .theme-toggle{display:inline-flex; border:1px solid var(--line); border-radius:3px; overflow:hidden}
+  .theme-toggle button{
+    border:none; background:var(--bg); color:var(--fg-soft);
+    padding:6px 10px; cursor:pointer; font-size:11px; font-family:inherit;
+    border-right:1px solid var(--line);
+  }
+  .theme-toggle button:last-child{border-right:none}
+  .theme-toggle button.active{background:var(--head-bg); color:var(--head-fg)}
+  .theme-toggle button:hover:not(.active){background:var(--bg-hover)}
+
+  main{flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; position:relative}
+
+  .welcome{
+    flex:1; display:none; flex-direction:column; align-items:center; justify-content:center;
+    padding:40px; gap:24px; background:var(--bg-soft);
+  }
+  .welcome.on{display:flex}
+  .welcome h2{font-size:22px; font-weight:300}
+  .welcome h2 b{color:var(--red); font-weight:600}
+  .welcome p{color:var(--fg-soft); max-width:620px; text-align:center; line-height:1.6}
+  .drop{
+    border:2px dashed var(--line); padding:30px 50px; border-radius:6px;
+    background:var(--bg); transition:all .2s;
+    display:flex; flex-direction:column; gap:14px; align-items:center; min-width:560px;
+  }
+  .drop.over{border-color:var(--red); background:var(--bg-soft)}
+  .file-row{
+    display:flex; align-items:center; justify-content:space-between; gap:20px;
+    width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:4px;
+    background:var(--bg-soft);
+  }
+  .file-row .name{font-family:"SF Mono", Consolas, monospace; font-size:12px; color:var(--fg)}
+  .file-row .status{font-size:11px; color:var(--fg-mute)}
+  .file-row .status.ok{color:var(--direct-bd); font-weight:600}
+  .help{font-size:11px; color:var(--fg-mute); margin-top:8px; text-align:center}
+  .progress{display:none; align-items:center; gap:12px; font-size:12px; color:var(--fg-soft)}
+  .progress.on{display:flex}
+  .spinner{width:14px; height:14px; border:2px solid var(--line); border-top-color:var(--red); border-radius:50%; animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .view{display:none; flex:1; min-height:0; flex-direction:column}
+  .view.on{display:flex}
+
+  .toolbar{
+    background:var(--bg); border-bottom:1px solid var(--line);
+    padding:10px 20px; display:flex; align-items:center; gap:16px;
+    flex-shrink:0; flex-wrap:wrap;
+  }
+  .toolbar .group{display:flex; align-items:center; gap:8px}
+  .toolbar label{font-size:11px; color:var(--fg-mute); font-weight:600; letter-spacing:1px; text-transform:uppercase}
+  .toolbar input[type=search]{width:240px}
+  .toolbar .stat{font-size:11px; color:var(--fg-soft)}
+  .toolbar .stat b{color:var(--fg); font-weight:600}
+  .breadcrumb{display:flex; align-items:center; gap:10px; font-size:12px}
+  .breadcrumb .back{
+    display:inline-flex; align-items:center; gap:6px;
+    color:var(--fg-soft); text-decoration:none;
+    padding:5px 12px; border-radius:3px; border:1px solid var(--line);
+    background:var(--bg); cursor:pointer; font-family:inherit;
+  }
+  .breadcrumb .back:hover{background:var(--bg-hover); border-color:var(--red); color:var(--fg)}
+  .breadcrumb .sep{color:var(--fg-mute)}
+  .breadcrumb .ndg{
+    font-family:"SF Mono", Consolas, monospace; font-weight:600; color:var(--red);
+    background:var(--bg-active); padding:3px 10px; border-radius:3px;
+  }
+
+  .metrics{
+    display:grid; grid-template-columns:1.2fr 1fr 1.8fr;
+    gap:1px; background:var(--line); border-bottom:1px solid var(--line);
+    max-height:240px; flex-shrink:0;
+  }
+  .panel{background:var(--bg); padding:14px 16px; overflow:hidden; display:flex; flex-direction:column; min-height:0}
+  .panel h3{font-size:10px; font-weight:600; color:var(--fg-mute); letter-spacing:2px; text-transform:uppercase; margin-bottom:10px}
+  .panel-body{flex:1; min-height:0; overflow:auto}
+  .panel-body::-webkit-scrollbar{width:6px; height:6px}
+  .panel-body::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
+  .kv{display:flex; align-items:center; padding:4px 6px; border-radius:3px; font-size:12px; cursor:pointer; margin-bottom:1px}
+  .kv:hover{background:var(--bg-hover)}
+  .kv.active{background:var(--red); color:#fff}
+  .kv > div{flex:1; min-width:0}
+  .kv-row{display:flex; justify-content:space-between; gap:8px}
+  .kv-k{font-weight:500}
+  .kv-c{font-variant-numeric:tabular-nums; color:var(--fg-soft); font-size:11px}
+  .kv.active .kv-c{color:#fff}
+  .bar{height:3px; background:var(--bg-soft); margin-top:3px; border-radius:2px; overflow:hidden}
+  .bar > div{height:100%; background:var(--red); transition:width .25s}
+  .kv.active .bar{background:rgba(255,255,255,.2)}
+  .kv.active .bar > div{background:#fff}
+  .chart-wrap{position:relative; flex:1; min-height:0}
+  canvas{max-width:100%; max-height:100%}
+
+  .active-filters{
+    background:var(--chip-bg); border-bottom:1px solid var(--chip-bd);
+    padding:8px 20px; display:none; gap:10px; align-items:center;
+    font-size:11px; color:var(--chip-fg); flex-shrink:0; flex-wrap:wrap;
+  }
+  .active-filters.on{display:flex}
+  .chip{
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--bg); border:1px solid var(--chip-bd); padding:3px 8px;
+    border-radius:12px; font-size:11px; color:var(--fg);
+  }
+  .chip b{color:var(--fg)}
+  .chip .x{cursor:pointer; color:var(--fg-mute); font-weight:bold; padding:0 2px}
+  .chip .x:hover{color:var(--red)}
+
+  .grid-wrap{flex:1; min-height:0; display:flex; flex-direction:column; background:var(--bg); overflow:hidden}
+  .grid-head{display:flex; background:var(--head-bg); color:var(--head-fg); font-size:11px; font-weight:600; letter-spacing:1px; flex-shrink:0; user-select:none; overflow-x:auto; overflow-y:hidden; scrollbar-width:none}
+  .grid-head::-webkit-scrollbar{display:none}
+  .grid-head .cell{padding:10px 12px; border-right:1px solid var(--head-line); display:flex; flex-direction:column; gap:6px; position:relative}
+  .grid-head .cell:last-child{border-right:none}
+  .grid-head .resizer{
+    position:absolute; top:0; right:-3px; width:6px; height:100%;
+    cursor:col-resize; z-index:5; background:transparent;
+  }
+  .grid-head .resizer:hover, .grid-head .resizer.dragging{
+    background:var(--red); opacity:.6;
+  }
+  body.col-resizing{cursor:col-resize !important}
+  body.col-resizing *{cursor:col-resize !important; user-select:none !important}
+  .grid-head .sort-trig{display:flex; justify-content:space-between; align-items:center; cursor:pointer; gap:6px}
+  .grid-head .sort-trig:hover{color:#ffd}
+  .grid-head .sort-i{font-size:9px; opacity:.5}
+  .grid-head .sort-trig.sorted .sort-i{opacity:1; color:#ffaaaa}
+  .col-filter{
+    border:none; background:rgba(255,255,255,.1); color:var(--head-fg);
+    padding:3px 6px; font-size:11px; border-radius:2px; font-family:inherit; width:100%;
+  }
+  .col-filter::placeholder{color:rgba(255,255,255,.4)}
+  .col-filter:focus{outline:none; background:rgba(255,255,255,.2)}
+  .col-filter-range{display:flex; gap:3px; width:100%}
+  .col-filter-range > input{
+    flex:1; min-width:0;
+    border:none; background:rgba(255,255,255,.1); color:var(--head-fg);
+    padding:3px 5px; font-size:10px; border-radius:2px;
+    font-family:inherit; font-variant-numeric:tabular-nums;
+  }
+  .col-filter-range > input::placeholder{color:rgba(255,255,255,.4)}
+  .col-filter-range > input:focus{outline:none; background:rgba(255,255,255,.2)}
+
+  .grid-body{flex:1; overflow:auto; position:relative}
+  .grid-body::-webkit-scrollbar{width:10px; height:10px}
+  .grid-body::-webkit-scrollbar-thumb{background:var(--line); border-radius:5px}
+  .grid-body::-webkit-scrollbar-thumb:hover{background:var(--fg-mute)}
+  .virtual-spacer{position:absolute; left:0; top:0; width:1px; pointer-events:none}
+  .virtual-row{
+    position:absolute; left:0; right:0; display:flex; border-bottom:1px solid var(--line);
+    font-size:12px; font-variant-numeric:tabular-nums;
+    background:var(--bg); cursor:pointer;
+  }
+  .virtual-row:nth-child(even){background:var(--bg-soft)}
+  .virtual-row:hover{background:var(--bg-active) !important}
+  .virtual-row .cell{padding:6px 12px; border-right:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .virtual-row .cell:last-child{border-right:none}
+  .view-detail .virtual-row{cursor:default}
+
+  .pill{display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:600; letter-spacing:.5px}
+  .pill-link{background:var(--link-bg); color:var(--link-bd); border:1px solid var(--link-bd)}
+  .pill-direct{background:var(--direct-bg); color:var(--direct-bd); border:1px solid var(--direct-bd)}
+  .pill-na{background:var(--na-bg); color:var(--na-bd); border:1px solid var(--na-bd)}
+  .pill-src{display:inline-block; padding:1px 6px; border-radius:2px; background:var(--bg-soft); border:1px solid var(--line); font-size:10px; color:var(--fg-soft); font-weight:500}
+  .virtual-row.master-row{background:var(--bg-active) !important; box-shadow:inset 4px 0 0 var(--red)}
+
+  /* ---------- Parent view (link diagrams) ---------- */
+  .parent-wrap{flex:1; min-height:0; overflow:auto; padding:14px 20px; background:var(--bg-soft)}
+  .parent-wrap::-webkit-scrollbar{width:10px; height:10px}
+  .parent-wrap::-webkit-scrollbar-thumb{background:var(--line); border-radius:5px}
+  .parent-meta{
+    background:var(--bg); border:1px solid var(--line); border-radius:4px;
+    padding:12px 16px; margin-bottom:14px; font-size:12px;
+  }
+  .parent-meta .lbl{color:var(--fg-mute); font-size:10px; text-transform:uppercase; letter-spacing:1px}
+  .parent-meta .val{font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums}
+  .parent-meta .row{display:flex; gap:24px; align-items:baseline; flex-wrap:wrap}
+  .child-card{
+    background:var(--bg); border:1px solid var(--line); border-radius:4px;
+    margin-bottom:12px; padding:12px 16px; overflow:hidden;
+  }
+  .child-card .head{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:10px}
+  .child-card .head .ndg{font-family:"SF Mono",Consolas,monospace; font-weight:600; color:var(--fg)}
+  .child-card .head .descr{color:var(--fg-soft); font-size:12px}
+  .child-card .head .badge-case{
+    font-size:10px; padding:2px 8px; border-radius:10px; font-weight:600; letter-spacing:.5px;
+  }
+  .child-card .head .badge-case.A{background:var(--direct-bg); color:var(--direct-bd); border:1px solid var(--direct-bd)}
+  .child-card .head .badge-case.B{background:var(--link-bg); color:var(--link-bd); border:1px solid var(--link-bd)}
+  .child-card .head .link-dates{
+    margin-left:auto;
+    font-size:11px; font-variant-numeric:tabular-nums; font-weight:600;
+    padding:3px 10px; border-radius:3px;
+    background:var(--bg-soft); border:1px solid var(--line);
+  }
+  .child-card .head .link-dates.A{color:var(--red); border-color:var(--red)}
+  .child-card .head .link-dates.B{color:var(--link-bd); border-color:var(--link-bd)}
+  .child-card .eor-formula{
+    font-size:11px; color:var(--fg-soft); font-variant-numeric:tabular-nums;
+    margin-top:10px; padding-top:8px; border-top:1px solid var(--line);
+  }
+  .child-card .eor-formula b{color:var(--fg)}
+  .child-card svg{width:100%; height:auto; display:block}
+  .parent-empty{
+    text-align:center; padding:40px; color:var(--fg-soft); font-size:13px;
+  }
+  .parent-empty b{color:var(--fg); display:block; margin-bottom:4px; font-size:14px}
+  /* PARENT and NDG cells in detail grid → clickable affordance */
+  #view-detail .virtual-row .cell[data-col="PARENT"]:not(:empty),
+  #view-detail .virtual-row .cell[data-col="NDG"]{
+    cursor:pointer; color:var(--red); text-decoration:underline; text-underline-offset:2px;
+  }
+  #view-detail .virtual-row .cell[data-col="PARENT"]:not(:empty):hover,
+  #view-detail .virtual-row .cell[data-col="NDG"]:hover{
+    background:var(--bg-active);
+  }
+  /* UML diagram (PARENT ↔ CHILDren) */
+  .uml-wrap{
+    background:var(--bg); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin-bottom:14px; overflow:auto;
+  }
+  .uml-wrap svg{display:block; max-width:100%; height:auto}
+  .uml-wrap .uml-node{cursor:pointer}
+  .uml-wrap .uml-node:hover rect{filter:brightness(1.08)}
+  .uml-wrap .uml-node:hover text.uml-ndg{text-decoration:underline}
+  .link-section-header{
+    font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;
+    color:var(--fg-soft); margin:20px 4px 10px;
+    padding-bottom:6px; border-bottom:1px solid var(--line);
+  }
+  footer{background:var(--bg-soft); border-top:1px solid var(--line); padding:6px 20px; font-size:10px; color:var(--fg-mute); flex-shrink:0; display:flex; justify-content:space-between}
+  .empty{padding:60px; text-align:center; color:var(--fg-soft); font-size:13px}
+  .empty b{color:var(--fg); display:block; margin-bottom:4px; font-size:14px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">UBS</span>
+    <h1 id="page-title">EOR — Master</h1>
+    <span class="sub" id="job-info"></span>
+  </div>
+  <div class="right-tools">
+    <span class="progress" id="progress"><span class="spinner"></span><span id="prog-text">…</span></span>
+    <button class="btn" id="btn-reload" style="display:none" title="Carica un file diverso, scartando i dati attuali">📁 Carica nuovo file…</button>
+    <div class="theme-toggle" id="theme-toggle" title="Tema">
+      <button data-theme="auto">Auto</button>
+      <button data-theme="light">☀</button>
+      <button data-theme="dark">☾</button>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <div class="welcome view" id="view-welcome">
+    <h2>EOR Viewer<span style="color:var(--fg-mute); font-weight:300">  ·  consulta i risultati del calcolo</span></h2>
+
+    <div class="drop" id="drop-zone">
+
+      <div style="font-size:14px; line-height:1.6; color:var(--fg); text-align:center; margin-bottom:4px">
+        Carica il file
+        <span style="font-family:'SF Mono', Consolas, monospace; background:var(--bg-soft); padding:2px 8px; border-radius:3px; font-size:12px">eorfull.csv</span>
+        con tutte le date EoR di tutti i clienti
+      </div>
+
+      <div style="display:flex; align-items:center; gap:14px; margin:8px 0">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:6px; flex:1">
+          <div style="font-size:36px">📥</div>
+          <div style="font-size:13px; font-weight:600; color:var(--fg)">Trascinalo qui</div>
+          <div style="font-size:11px; color:var(--fg-mute); text-align:center">apri la cartella dove è salvato<br>e trascinalo in questa finestra</div>
+        </div>
+        <div style="font-size:13px; color:var(--fg-mute); font-weight:600">oppure</div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:6px; flex:1">
+          <div style="font-size:36px">📂</div>
+          <div style="font-size:13px; font-weight:600; color:var(--fg)">Selezionalo manualmente</div>
+          <div style="font-size:11px; color:var(--fg-mute); text-align:center">usa il pulsante qui sotto<br>per scegliere il file</div>
+        </div>
+      </div>
+
+      <div style="width:100%; border-top:1px solid var(--line); margin-top:4px; padding-top:14px">
+        <div class="file-row">
+          <span style="display:flex; flex-direction:column; gap:2px">
+            <span class="name">eorfull.csv</span>
+            <span style="font-size:10px; color:var(--fg-mute)">tutte le date di tutti i sistemi per ogni cliente</span>
+          </span>
+          <span style="display:flex; gap:10px; align-items:center">
+            <span class="status" id="status-full">— in attesa —</span>
+            <label class="btn" for="file-full">Scegli file</label>
+            <input type="file" id="file-full" accept=".csv,.txt,.tsv">
+          </span>
+        </div>
+      </div>
+
+      <div class="help" style="margin-top:6px">Il file non esce dal tuo computer: viene letto dal browser e non viene inviato da nessuna parte.</div>
+    </div>
+  </div>
+
+  <div class="view view-master" id="view-master">
+    <div class="toolbar">
+      <div class="group">
+        <label>Ricerca</label>
+        <input type="search" id="search-master" placeholder="Cerca in tutte le colonne…">
+      </div>
+      <div class="group">
+        <label>Retention cut-off</label>
+        <input type="text" id="date-cutoff-master" class="date-max" placeholder="AAAA-MM-GG" title="Mostra solo NDG con almeno una EoR ≥ questa data. Formati: AAAA, AAAA-MM, AAAA-MM-GG">
+      </div>
+      <div class="group" style="margin-left:auto">
+        <span class="stat"><b id="stat-master-shown">0</b> di <b id="stat-master-total">0</b> NDG</span>
+        <button class="btn" id="btn-master-reset">Azzera filtri</button>
+        <button class="btn" id="btn-master-export">Esporta vista</button>
+        <button class="btn" id="btn-open-full" title="Esplora liberamente tutte le date di tutti i clienti, senza partire da un cliente specifico">🔍 Esplora EOR Full</button>
+      </div>
+    </div>
+    <div class="active-filters" id="active-filters-master"></div>
+    <div class="metrics">
+      <div class="panel"><h3>Source  ·  sistema sorgente</h3><div class="panel-body" id="panel-src"></div></div>
+      <div class="panel"><h3>Rel.Type  ·  natura</h3><div class="panel-body" id="panel-reltype"></div></div>
+      <div class="panel"><h3>EoR  ·  per anno</h3><div class="chart-wrap"><canvas id="chart-year"></canvas></div></div>
+    </div>
+    <div class="grid-wrap">
+      <div class="grid-head" id="head-master"></div>
+      <div class="grid-body" id="body-master">
+        <div class="virtual-spacer" id="spacer-master"></div>
+        <div id="viewport-master"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view view-detail" id="view-detail">
+    <div class="toolbar">
+      <div class="breadcrumb">
+        <button class="back" id="btn-back">← Master</button>
+        <span class="sep">/</span>
+        <span>Esplora <code style="background:var(--bg-soft); padding:2px 6px; border-radius:3px; font-size:11px">eorfull</code></span>
+        <span class="sep" id="detail-origin-sep">·</span>
+        <span style="color:var(--fg-mute); font-size:11px" id="detail-origin-lbl">drilldown da</span>
+        <span class="ndg" id="detail-ndg">—</span>
+      </div>
+      <div class="group">
+        <label>Ricerca</label>
+        <input type="search" id="search-detail" placeholder="Cerca…">
+      </div>
+      <div class="group" style="margin-left:auto">
+        <span class="stat"><b id="stat-detail-shown">0</b> di <b id="stat-detail-total">0</b> righe</span>
+        <button class="btn" id="btn-detail-reset">Azzera filtri</button>
+        <button class="btn" id="btn-detail-export">Esporta</button>
+      </div>
+    </div>
+    <div class="active-filters" id="active-filters-detail"></div>
+    <div class="grid-wrap">
+      <div class="grid-head" id="head-detail"></div>
+      <div class="grid-body" id="body-detail">
+        <div class="virtual-spacer" id="spacer-detail"></div>
+        <div id="viewport-detail"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-parent">
+    <div class="toolbar">
+      <div class="group">
+        <button class="btn" id="btn-parent-back" title="Torna alla vista precedente">← Indietro</button>
+        <button class="btn" id="btn-link-master" title="Vai al Master filtrato sul NDG corrente">Master</button>
+        <button class="btn" id="btn-link-full" title="Vai a EOR Full filtrato sul NDG corrente">EOR Full</button>
+      </div>
+      <div class="group" style="margin-left:auto">
+        <span class="stat" id="parent-stat"></span>
+      </div>
+    </div>
+    <div class="parent-wrap" id="parent-wrap"></div>
+  </div>
+
+</main>
+
+<footer>
+  <span>EOR Viewer  ·  i dati restano sul tuo PC, mai trasmessi  ·  UBS</span>
+  <span id="render-stats"></span>
+</footer>
+
+<script>
+const COLS = ["CODCLI","NDG","DESCR","PARENT","DT_INILINK","DT_ENDLINK","DT_EOR","REL_TYPE","CS_APP","SOURCE"];
+const COL_HINTS = {
+  CODCLI:        { label:'CS Code',     type:'string', width:90  },
+  NDG:           { label:'NDG',         type:'string', width:90  },
+  DESCR:         { label:'Description', type:'string', width:220 },
+  PARENT:        { label:'Parent',      type:'string', width:90  },
+  DT_INILINK:    { label:'Link Start',  type:'date',   width:110, masterHidden:true },
+  DT_ENDLINK:    { label:'Link End',    type:'date',   width:110, masterHidden:true },
+  DT_EOR:        { label:'EoR',         type:'date',   width:110 },
+  SOURCE:        { label:'Reason',      type:'string', width:300 },
+  REL_TYPE:      { label:'Rel.Type',    type:'string', width:100, render: renderRelType },
+  CS_APP:        { label:'Source',      type:'string', width:100, render: renderCsApp },
+};
+// Columns visible per view ('master' hides Link Start/End; 'detail' shows everything)
+function colsFor(view){
+  if(view === 'master') return COLS.filter(c => !COL_HINTS[c].masterHidden);
+  return COLS;
+}
+const ROW_H = 28;
+
+const S = {
+  master:{ rows:[], view:[], search:'', colFilters:{}, drilldown:{}, sortCol:'NDG', sortDir:'asc', yearChart:null },
+  full:  { rows:[], byNdg:null },
+  detail:{ originNdg:null, highlightDt:null, view:[], search:'', colFilters:{} },
+  dateMin: '2016-06-30',  // global retention cut-off, shared between views
+  loaded:{ full:false },
+};
+
+/* ---------- THEME ---------- */
+function applyTheme(mode){
+  const root = document.documentElement;
+  if(mode === 'auto'){
+    root.setAttribute('data-theme', window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  } else {
+    root.setAttribute('data-theme', mode);
+  }
+  document.querySelectorAll('.theme-toggle button').forEach(b => b.classList.toggle('active', b.dataset.theme === mode));
+  if(S.master.yearChart) renderYearChart(computeYearAgg(S.master.view));
+}
+document.querySelectorAll('.theme-toggle button').forEach(b => b.addEventListener('click', () => {
+  const m = b.dataset.theme; localStorage.setItem('eor-theme', m); applyTheme(m);
+}));
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if((localStorage.getItem('eor-theme') || 'auto') === 'auto') applyTheme('auto');
+});
+applyTheme(localStorage.getItem('eor-theme') || 'auto');
+
+/* ---------- HELPERS ---------- */
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function renderRelType(v){
+  if(!v) return '';
+  const cls = v==='LINK' ? 'pill-link' : v==='DIRECT' ? 'pill-direct' : 'pill-na';
+  return `<span class="pill ${cls}">${esc(v)}</span>`;
+}
+function renderCsApp(v){
+  if(!v) return '';
+  return `<span class="pill-src">${esc(v)}</span>`;
+}
+function debounce(fn, ms){ let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+/* Date filter helpers — accept YYYY / YYYY-MM / YYYY-MM-DD.
+   "from" side: expand to the FIRST day of the period.
+   "to"   side: expand to the LAST  day of the period.
+   Returns null for empty / unrecognized strings. */
+function expandDateFrom(s){
+  s = (s || '').trim();
+  if(!s) return null;
+  if(/^\d{4}$/.test(s)) return s + '-01-01';
+  if(/^\d{4}-\d{1,2}$/.test(s)){
+    const [y,m] = s.split('-'); return y + '-' + m.padStart(2,'0') + '-01';
+  }
+  if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){
+    const [y,m,d] = s.split('-');
+    return y + '-' + m.padStart(2,'0') + '-' + d.padStart(2,'0');
+  }
+  return s; // pass through; will simply not match anything
+}
+function expandDateTo(s){
+  s = (s || '').trim();
+  if(!s) return null;
+  if(/^\d{4}$/.test(s)) return s + '-12-31';
+  if(/^\d{4}-\d{1,2}$/.test(s)){
+    const [y,m] = s.split('-');
+    const mm = m.padStart(2,'0');
+    // last day of month — JS Date roll-over trick
+    const last = new Date(Number(y), Number(m), 0).getDate();
+    return y + '-' + mm + '-' + String(last).padStart(2,'0');
+  }
+  if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){
+    const [y,m,d] = s.split('-');
+    return y + '-' + m.padStart(2,'0') + '-' + d.padStart(2,'0');
+  }
+  return s;
+}
+function formatDateRange(v){
+  if(v && typeof v === 'object'){
+    return (v.from || '…') + '  →  ' + (v.to || '…');
+  }
+  return String(v);
+}
+
+/* ---------- LOADING ---------- */
+function setProgress(text){
+  const p = document.getElementById('progress');
+  if(text){ p.classList.add('on'); document.getElementById('prog-text').textContent = text; }
+  else p.classList.remove('on');
+}
+function setStatus(which, text, cls){
+  const el = document.getElementById('status-' + which);
+  el.textContent = text;
+  el.classList.remove('ok','err');
+  if(cls) el.classList.add(cls);
+}
+function parseCsvFile(file){
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    Papa.parse(file, {
+      header:true, skipEmptyLines:true,
+      chunk: r => { for(const x of r.data) rows.push(x); },
+      complete: () => resolve(rows),
+      error: reject,
+    });
+  });
+}
+
+/* ---------- FILE LOADING ---------- */
+document.getElementById('file-full').addEventListener('change', async e => {
+  if(!e.target.files[0]) return;
+  await loadFile(e.target.files[0]);
+});
+
+const drop = document.getElementById('drop-zone');
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', async e => {
+  for(const f of e.dataTransfer.files){
+    await loadFile(f);
+    break;
+  }
+});
+
+async function loadFile(file){
+  setProgress(`Lettura ${file.name}…`);
+  setStatus('full', 'Lettura in corso…');
+  try {
+    S.full.rows = await parseCsvFile(file);
+    S.loaded.full = true;
+    setStatus('full', `${S.full.rows.length.toLocaleString('it')} righe`, 'ok');
+    setProgress('Calcolo EoR vincente per NDG…');
+    // give the browser a tick to repaint before the heavy reduction
+    await new Promise(r => setTimeout(r, 30));
+    deriveMasterRows();
+    setProgress('');
+    initAppOnce();
+  } catch(err){
+    setProgress('');
+    setStatus('full', 'Errore: ' + err.message);
+  }
+}
+
+/* Replicates the SQL EORMASTER derivation:
+     WITH EORFULL_NOT_NULL AS (
+       SELECT ..., CASE WHEN DT_EOR IS NULL THEN DATE('2025-01-12') ELSE DT_EOR END AS DT_EOR ...
+       FROM EORFULL
+     )
+     SELECT * FROM (
+       SELECT ..., ROW_NUMBER() OVER (
+         PARTITION BY CODCLI, NDG
+         ORDER BY DT_EOR DESC, PRIORITY, SOURCE DESC
+       ) AS rn FROM EORFULL_NOT_NULL
+     ) WHERE rn=1 AND DT_EOR > '2016-06-30'
+*/
+function effectiveDtEor(r){
+  // CASE WHEN DT_EOR IS NULL THEN DATE('2025-01-12') ELSE DT_EOR END
+  return r.DT_EOR || '2025-01-12';
+}
+function deriveMasterRows(){
+  const t0 = performance.now();
+  const cutoff = S.dateMin || '';
+  const best = new Map();
+  for(const r of S.full.rows){
+    const ndg = r.NDG;
+    if(!ndg) continue;
+    const dt = effectiveDtEor(r);
+    // SQL "> '2016-06-30'" — strict greater-than, NOT >=
+    if(cutoff && dt <= cutoff) continue;
+    // PARTITION BY CODCLI, NDG — one winning row per (CODCLI, NDG) couple
+    const partKey = (r.CODCLI || '') + '\u0001' + ndg;
+    const cur = best.get(partKey);
+    if(!cur || compareForVincente(r, cur) < 0) best.set(partKey, r);
+  }
+  S.master.rows = Array.from(best.values());
+  console.log(`deriveMasterRows: ${S.master.rows.length.toLocaleString('it')} (CODCLI,NDG) (cut-off ${cutoff || 'nessuno'}) in ${(performance.now()-t0).toFixed(0)}ms`);
+}
+
+// Negative if A wins over B. DT_EOR DESC, PRIORITY ASC, SOURCE DESC.
+// Uses effective DT_EOR (NULL → 2025-01-12) to match the SQL coalesce.
+function compareForVincente(a, b){
+  const da = effectiveDtEor(a); const db = effectiveDtEor(b);
+  if(da !== db) return da > db ? -1 : 1;
+  const pa = Number(a.PRIORITY), pb = Number(b.PRIORITY);
+  const paOk = !isNaN(pa), pbOk = !isNaN(pb);
+  if(paOk && pbOk && pa !== pb) return pa - pb;
+  if(paOk && !pbOk) return -1;
+  if(!paOk && pbOk) return 1;
+  const sa = a.SOURCE || ''; const sb = b.SOURCE || '';
+  if(sa !== sb) return sa > sb ? -1 : 1;
+  return 0;
+}
+
+/* ---------- APP INIT ---------- */
+let appInit = false;
+function initAppOnce(){
+  if(appInit) return;
+  appInit = true;
+  loadColWidths();
+  document.getElementById('view-welcome').classList.remove('on');
+  buildHead('head-master', 'master');
+  buildHead('head-detail', 'detail');
+  buildNdgIndex();
+  // Sync cut-off input(s) with default value
+  document.querySelectorAll('input[id^="date-cutoff"]').forEach(i => { i.value = S.dateMin || ''; });
+  showView('master');
+  recomputeMaster();
+  document.getElementById('job-info').textContent =
+    `${S.full.rows.length.toLocaleString('it')} righe totali  ·  ${S.master.rows.length.toLocaleString('it')} NDG con EoR post-cutoff`;
+  document.getElementById('btn-reload').style.display = '';
+  handleHash();
+}
+
+/* ---------- RELOAD (open a different file) ---------- */
+document.getElementById('btn-reload').addEventListener('click', () => {
+  if(!confirm('Caricare un nuovo file? I dati e i filtri attuali verranno scartati.')) return;
+  // Reset state
+  S.full.rows = []; S.full.byNdg = null;
+  S.master.rows = []; S.master.view = [];
+  S.master.search = ''; S.master.colFilters = {}; S.master.drilldown = {};
+  S.master.sortCol = 'NDG'; S.master.sortDir = 'asc';
+  S.detail.view = []; S.detail.search = ''; S.detail.colFilters = {};
+  S.detail.originNdg = null; S.detail.highlightDt = null;
+  S.dateMin = '2016-06-30';
+  S.loaded = { full:false };
+  // Allow initAppOnce to run again
+  appInit = false;
+  // Hide views, show welcome
+  document.querySelectorAll('main > .view').forEach(v => v.classList.remove('on'));
+  document.getElementById('view-welcome').classList.add('on');
+  document.getElementById('btn-reload').style.display = 'none';
+  document.getElementById('job-info').textContent = '';
+  document.getElementById('page-title').textContent = 'EOR Viewer';
+  // Reset welcome status label and clear the file input so re-picking the SAME file fires "change"
+  setStatus('full', '— in attesa —');
+  const fileInput = document.getElementById('file-full');
+  if(fileInput) fileInput.value = '';
+  // Clear URL hash so we land on master next time
+  if(location.hash) history.replaceState(null, '', location.pathname + location.search);
+});
+
+/* ---------- VIEW ROUTING ---------- */
+function showView(name){
+  document.querySelectorAll('main > .view').forEach(v => v.classList.remove('on'));
+  document.getElementById('view-' + name).classList.add('on');
+  if(name === 'master') document.getElementById('page-title').textContent = 'EOR — Master';
+  else if(name === 'detail') document.getElementById('page-title').textContent = 'EOR — Dettaglio NDG';
+  else if(name === 'parent') document.getElementById('page-title').textContent = 'EOR — Legami del NDG';
+  else document.getElementById('page-title').textContent = 'EOR — Viewer';
+}
+function goToDetail(row){
+  if(!row || !row.NDG) return;
+  location.hash = '#ndg=' + encodeURIComponent(row.NDG) + (row.DT_EOR ? '&dt=' + encodeURIComponent(row.DT_EOR) : '');
+}
+function goToExplore(){
+  location.hash = '#explore';
+}
+function goToNode(ndg){
+  if(!ndg) return;
+  location.hash = '#node=' + encodeURIComponent(ndg);
+}
+// Legacy aliases (kept for backward compatibility with saved hashes)
+function goToParent(ndg){ goToNode(ndg); }
+function goToChild(ndg){ goToNode(ndg); }
+function handleHash(){
+  if(!appInit) return;
+  const h = location.hash.slice(1);
+  if(h === 'explore'){ openDetailFree(); return; }
+  // Canonical: #node=<NDG>
+  // Aliases #parent= and #child= are accepted as historical entry points.
+  let m;
+  if((m = /^node=(.+)$/.exec(h))   ||
+     (m = /^parent=(.+)$/.exec(h)) ||
+     (m = /^child=(.+)$/.exec(h))){
+    const ndg = decodeURIComponent(m[1].split('&')[0] || '');
+    if(ndg) openLinkView(ndg);
+    else showView('master');
+    return;
+  }
+  if(!h.startsWith('ndg=')){ showView('master'); return; }
+  const params = new URLSearchParams(h);
+  const ndg = params.get('ndg');
+  const dt = params.get('dt');
+  if(!ndg){ showView('master'); return; }
+  openDetail(ndg, dt);
+}
+window.addEventListener('hashchange', handleHash);
+document.getElementById('btn-back').addEventListener('click', () => { location.hash = ''; });
+document.getElementById('btn-open-full').addEventListener('click', () => goToExplore());
+document.getElementById('btn-parent-back').addEventListener('click', () => { history.back(); });
+
+/* ---------- LINK VIEW: navigate from current focus NDG ---------- */
+function getCurrentLinkFocus(){
+  const h = location.hash.slice(1);
+  const m = /^(?:node|parent|child)=(.+)$/.exec(h);
+  return m ? decodeURIComponent(m[1].split('&')[0] || '') : '';
+}
+function goToMasterWithNdg(ndg){
+  if(!ndg) { location.hash = ''; return; }
+  // Clear master filters/search, then apply NDG filter
+  S.master.search = '';
+  S.master.colFilters = { NDG: ndg };
+  S.master.drilldown = {};
+  // Sync UI search box
+  const sm = document.getElementById('search-master');
+  if(sm) sm.value = '';
+  location.hash = '';  // exit the link view
+  // showView + recompute happen automatically via handleHash → master
+  // but we need to recompute master once the filter is set
+  showView('master');
+  recomputeMaster();
+}
+document.getElementById('btn-link-master').addEventListener('click', () => {
+  const ndg = getCurrentLinkFocus();
+  goToMasterWithNdg(ndg);
+});
+document.getElementById('btn-link-full').addEventListener('click', () => {
+  const ndg = getCurrentLinkFocus();
+  if(ndg) goToDetail({ NDG: ndg });
+});
+
+function buildNdgIndex(){
+  if(S.full.byNdg) return;
+  const m = new Map();
+  for(const r of S.full.rows){
+    const k = r.NDG; if(!k) continue;
+    let arr = m.get(k); if(!arr){ arr = []; m.set(k, arr); }
+    arr.push(r);
+  }
+  S.full.byNdg = m;
+}
+function sortDetail(rows){
+  // NDG ASC, DT_EOR DESC, PRIORITY ASC, SOURCE ASC
+  return rows.slice().sort((a,b) => {
+    const c1 = (a.NDG||'').localeCompare(b.NDG||''); if(c1) return c1;
+    const c2 = (b.DT_EOR||'').localeCompare(a.DT_EOR||''); if(c2) return c2;
+    const c3 = (Number(a.PRIORITY)||0) - (Number(b.PRIORITY)||0); if(c3) return c3;
+    return (a.SOURCE||'').localeCompare(b.SOURCE||'');
+  });
+}
+
+function openDetail(ndg, highlightDt){
+  showView('detail');
+  S.detail.originNdg = ndg;
+  S.detail.highlightDt = highlightDt || null;
+  // Set initial NDG filter (can be removed/changed by the user)
+  S.detail.colFilters = { NDG: ndg };
+  S.detail.search = '';
+  // Sync the breadcrumb and search field
+  document.getElementById('detail-ndg').textContent = ndg;
+  document.getElementById('detail-origin-sep').style.display = '';
+  document.getElementById('detail-origin-lbl').style.display = '';
+  document.getElementById('search-detail').value = '';
+  // Sync column-filter inputs (text)
+  document.querySelectorAll('#head-detail .col-filter').forEach(i => {
+    i.value = i.dataset.col === 'NDG' ? ndg : '';
+  });
+  // Clear range inputs
+  document.querySelectorAll('#head-detail .col-filter-range > input').forEach(i => { i.value = ''; });
+  recomputeDetail();
+}
+
+function openDetailFree(){
+  // Open detail with NO initial filter — free exploration of eorfull
+  showView('detail');
+  S.detail.originNdg = null;
+  S.detail.highlightDt = null;
+  S.detail.colFilters = {};
+  S.detail.search = '';
+  // Breadcrumb: no origin NDG
+  document.getElementById('detail-ndg').textContent = '(vista libera)';
+  document.getElementById('detail-origin-sep').style.display = 'none';
+  document.getElementById('detail-origin-lbl').style.display = 'none';
+  document.getElementById('search-detail').value = '';
+  document.querySelectorAll('#head-detail .col-filter').forEach(i => { i.value = ''; });
+  document.querySelectorAll('#head-detail .col-filter-range > input').forEach(i => { i.value = ''; });
+  recomputeDetail();
+}
+
+/* ============================================================
+   LINK VIEW — visualizzazione dei legami di un NDG
+   Mostra SEMPRE entrambi i lati:
+     · a sinistra: i PARENT del nodo focus (= nodi a cui il focus è legato come CHILD)
+     · al centro:  il nodo focus
+     · a destra:   i CHILD del nodo focus (= nodi che hanno il focus come PARENT)
+   La 'direction' parametro decide solo il titolo della pagina (punto di vista d'ingresso).
+============================================================ */
+function openLinkView(centerNdg){
+  showView('parent');
+
+  const centerRows = (S.full.byNdg && S.full.byNdg.get(centerNdg)) || [];
+  const centerDescr = centerRows.length ? (centerRows[0].DESCR || '') : '';
+  const centerEor = computeOwnEor(centerRows);
+
+  // PARENT del centro: i nodi che compaiono come PARENT nelle righe LINK del centro
+  const parentNdgs = new Set();
+  for(const r of centerRows){
+    if(r.REL_TYPE === 'LINK' && r.PARENT && r.PARENT !== centerNdg) parentNdgs.add(r.PARENT);
+  }
+  // CHILD del centro: i nodi che hanno il centro come PARENT in qualche loro riga
+  const childNdgs = new Set();
+  for(const r of S.full.rows){
+    if(r.PARENT === centerNdg && r.NDG && r.NDG !== centerNdg) childNdgs.add(r.NDG);
+  }
+
+  // Per ogni coppia, l'info del legame con buildChildLinkInfo(parentNdg, childNdg)
+  // Sezione "PARENT": il centro è CHILD → buildChildLinkInfo(other, center)
+  const parentInfos = [];
+  for(const pNdg of parentNdgs){
+    const info = buildChildLinkInfo(pNdg, centerNdg);
+    if(info) parentInfos.push(info);
+  }
+  // Sezione "CHILD": il centro è PARENT → buildChildLinkInfo(center, other)
+  const childInfos = [];
+  for(const cNdg of childNdgs){
+    const info = buildChildLinkInfo(centerNdg, cNdg);
+    if(info) childInfos.push(info);
+  }
+  parentInfos.sort((a,b) => (b.dt_child_eor || '').localeCompare(a.dt_child_eor || ''));
+  childInfos.sort((a,b) => (b.dt_child_eor || '').localeCompare(a.dt_child_eor || ''));
+
+  // Header meta with both counts
+  const meta = `
+    <div class="row">
+      <div><span class="lbl">NDG</span> <span class="val">${esc(centerNdg)}</span></div>
+      <div><span class="lbl">Description</span> <span class="val">${esc(centerDescr || '—')}</span></div>
+      <div><span class="lbl">EoR (propria)</span> <span class="val">${esc(centerEor || '—')}</span></div>
+      <div><span class="lbl">PARENT legati</span> <span class="val">${parentInfos.length}</span></div>
+      <div><span class="lbl">CHILD legati</span> <span class="val">${childInfos.length}</span></div>
+    </div>`;
+  document.getElementById('parent-stat').textContent = centerRows.length
+    ? `NDG ${centerNdg}  ·  ${parentInfos.length} PARENT  ·  ${childInfos.length} CHILD`
+    : `NDG ${centerNdg} (non presente in eorfull)`;
+
+  const wrap = document.getElementById('parent-wrap');
+  if(!parentInfos.length && !childInfos.length){
+    wrap.innerHTML = `
+      <div class="parent-meta">${meta}</div>
+      <div class="parent-empty">
+        <b>Nessun legame trovato per ${esc(centerNdg)}</b>
+        Non sono presenti né PARENT né CHILD legati a questo NDG in EORFULL.
+      </div>`;
+    return;
+  }
+
+  // Compute a global X domain (years) shared by all timelines
+  const allDates = [];
+  for(const info of [...parentInfos, ...childInfos]){
+    [info.dt_inilink, info.dt_endlink, info.dt_child_own, info.dt_parent_own, info.dt_child_eor].forEach(d => { if(d) allDates.push(d); });
+  }
+  if(centerEor) allDates.push(centerEor);
+  allDates.sort();
+  const minY = allDates.length ? Math.max(1970, parseInt(allDates[0].slice(0,4)) - 1) : 2010;
+  const maxY = allDates.length ? parseInt(allDates[allDates.length-1].slice(0,4)) + 1 : 2026;
+  const domain = { minY, maxY };
+
+  // UML overview (always LTR: PARENT ← left, CHILD → right)
+  const uml = renderUmlDiagram({ centerNdg, centerDescr, centerEor, parentInfos, childInfos });
+
+  // Two card sections (timelines). Each card uses buildChildLinkInfo's own parent/child naming.
+  let cards = '';
+  if(parentInfos.length){
+    cards += `<div class="link-section-header">PARENT  ·  il nodo come CHILD di ${parentInfos.length} altri NDG</div>`;
+    cards += parentInfos.map(info => renderLinkDiagram(info, info.dt_parent_own, domain)).join('');
+  }
+  if(childInfos.length){
+    cards += `<div class="link-section-header">CHILD  ·  il nodo come PARENT di ${childInfos.length} altri NDG</div>`;
+    cards += childInfos.map(info => renderLinkDiagram(info, centerEor, domain)).join('');
+  }
+  wrap.innerHTML = `<div class="parent-meta">${meta}</div>${uml}${cards}`;
+
+  // Wire up clicks on UML nodes to navigate to that node's link view
+  wrap.querySelectorAll('.uml-node').forEach(n => {
+    n.addEventListener('click', () => {
+      const targetNdg = n.dataset.ndg;
+      if(targetNdg) goToNode(targetNdg);
+    });
+  });
+}
+
+/* Render the UML overview diagram.
+   Layout sempre LTR: PARENTs a sinistra, nodo focus al centro, CHILDren a destra.
+   Le frecce vanno sempre da SX (parent) verso DX (child) per ribadire il senso.
+   Ogni badge laterale è cliccabile e porta alla vista reciproca del nodo. */
+function renderUmlDiagram(opts){
+  const { centerNdg, centerDescr, centerEor, parentInfos = [], childInfos = [] } = opts;
+  const W = 1200;
+  const ITEM_H = 92;
+  const PAD_TOP = 24, PAD_BOTTOM = 24;
+  const maxRows = Math.max(parentInfos.length, childInfos.length, 1);
+  const H = Math.max(200, PAD_TOP + maxRows * ITEM_H + PAD_BOTTOM);
+
+  // Center node geometry
+  const cw = 260, ch = 100;
+  const cx = (W - cw) / 2;
+  const cy = (H - ch) / 2;
+  const cxL = cx, cxR = cx + cw, cxMid = cx + cw/2, cyMid = cy + ch/2;
+
+  // Side badges geometry
+  const sw = 270, sh = 76;
+  const xLeftBadge  = 30;                  // PARENT column
+  const xRightBadge = W - sw - 30;         // CHILD column
+
+  // Vertical positions: distribute each side's rows evenly across [PAD_TOP, H-PAD_BOTTOM]
+  function colYs(n){
+    if(n === 0) return [];
+    if(n === 1) return [H / 2 - sh / 2];
+    const avail = (H - PAD_TOP - PAD_BOTTOM) - sh;
+    const step = avail / (n - 1);
+    return Array.from({length:n}, (_, i) => PAD_TOP + i*step);
+  }
+  const yParents  = colYs(parentInfos.length);
+  const yChildren = colYs(childInfos.length);
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMin meet">`;
+
+  // Center badge (focus)
+  svg += `
+    <rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="8"
+          fill="var(--head-bg)" stroke="var(--head-bg)"/>
+    <text x="${cxMid}" y="${cy+18}" font-size="10" font-weight="700" letter-spacing="2"
+          fill="var(--red)" text-anchor="middle">FOCUS</text>
+    <text x="${cxMid}" y="${cy+42}" font-size="17" font-weight="700"
+          fill="var(--head-fg)" text-anchor="middle">${esc(centerNdg)}</text>
+    <text x="${cxMid}" y="${cy+62}" font-size="12"
+          fill="var(--head-fg)" text-anchor="middle" opacity="0.85">${esc(truncate(centerDescr || '', 30))}</text>
+    ${centerEor ? `<text x="${cxMid}" y="${cy+84}" font-size="11" font-weight="600"
+          fill="var(--head-fg)" text-anchor="middle" opacity="0.7">EoR ${esc(centerEor)}</text>` : ''}
+  `;
+
+  // PARENT badges (left side). Arrows go LEFT→RIGHT (parent → focus).
+  parentInfos.forEach((info, i) => {
+    const oy = yParents[i];
+    const oyMid = oy + sh/2;
+    const linkColor = info.caseA ? 'var(--red)' : 'var(--link-bd)';
+    // From parent right edge → focus left edge
+    const x1 = xLeftBadge + sw, y1 = oyMid;
+    const x2 = cxL, y2 = cyMid;
+    const dx = (x2 - x1) * 0.55;
+    svg += `<path d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"
+                  fill="none" stroke="${linkColor}" stroke-width="2" opacity="0.85"/>`;
+    // Arrow head pointing into the focus
+    const ah = 5;
+    svg += `<polygon points="${x2},${y2} ${x2-ah*1.6},${y2-ah} ${x2-ah*1.6},${y2+ah}" fill="${linkColor}"/>`;
+    // Parent badge — clicking opens "Legami del PARENT" of that NDG
+    const src = sourceForBadge(info.sources);
+    const NL = String.fromCharCode(10);
+    const tipText = esc(info.parentNdg) + '  ' + esc(info.parentDescr || '')
+                  + (src.tooltip ? NL + NL + 'Source del legame:' + NL + esc(src.tooltip) : '');
+    svg += `
+      <g class="uml-node" data-ndg="${esc(info.parentNdg)}" data-dir="as-parent">
+        <title>${tipText}</title>
+        <rect x="${xLeftBadge}" y="${oy}" width="${sw}" height="${sh}" rx="6"
+              fill="var(--bg)" stroke="${linkColor}" stroke-width="1.5"/>
+        <text x="${xLeftBadge+12}" y="${oy+15}" font-size="9" font-weight="700" letter-spacing="1.5"
+              fill="${linkColor}">PARENT</text>
+        <text class="uml-ndg" x="${xLeftBadge+12}" y="${oy+33}" font-size="14" font-weight="700"
+              fill="var(--fg)">${esc(info.parentNdg)}</text>
+        <text x="${xLeftBadge+12}" y="${oy+49}" font-size="11"
+              fill="var(--fg-soft)">${esc(truncate(info.parentDescr || '', 30))}</text>
+        ${src.display ? `<text x="${xLeftBadge+12}" y="${oy+66}" font-size="10" font-weight="600"
+              fill="${linkColor}">${esc(src.display)}</text>` : ''}
+        ${info.dt_parent_own ? `<text x="${xLeftBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
+              fill="${linkColor}" text-anchor="end">${esc(info.dt_parent_own)}</text>` : ''}
+        <text x="${xLeftBadge+sw-12}" y="${oy+49}" font-size="9" letter-spacing="1"
+              fill="var(--fg-mute)" text-anchor="end">${info.caseA ? 'LEGAME APERTO' : 'LEGAME CHIUSO'}</text>
+      </g>`;
+  });
+
+  // CHILD badges (right side). Arrows go LEFT→RIGHT (focus → child).
+  childInfos.forEach((info, i) => {
+    const oy = yChildren[i];
+    const oyMid = oy + sh/2;
+    const linkColor = info.caseA ? 'var(--red)' : 'var(--link-bd)';
+    const x1 = cxR, y1 = cyMid;
+    const x2 = xRightBadge, y2 = oyMid;
+    const dx = (x2 - x1) * 0.55;
+    svg += `<path d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"
+                  fill="none" stroke="${linkColor}" stroke-width="2" opacity="0.85"/>`;
+    const ah = 5;
+    svg += `<polygon points="${x2},${y2} ${x2-ah*1.6},${y2-ah} ${x2-ah*1.6},${y2+ah}" fill="${linkColor}"/>`;
+    const src = sourceForBadge(info.sources);
+    const NL = String.fromCharCode(10);
+    const tipText = esc(info.childNdg) + '  ' + esc(info.childDescr || '')
+                  + (src.tooltip ? NL + NL + 'Source del legame:' + NL + esc(src.tooltip) : '');
+    svg += `
+      <g class="uml-node" data-ndg="${esc(info.childNdg)}" data-dir="as-child">
+        <title>${tipText}</title>
+        <rect x="${xRightBadge}" y="${oy}" width="${sw}" height="${sh}" rx="6"
+              fill="var(--bg)" stroke="${linkColor}" stroke-width="1.5"/>
+        <text x="${xRightBadge+12}" y="${oy+15}" font-size="9" font-weight="700" letter-spacing="1.5"
+              fill="${linkColor}">CHILD</text>
+        <text class="uml-ndg" x="${xRightBadge+12}" y="${oy+33}" font-size="14" font-weight="700"
+              fill="var(--fg)">${esc(info.childNdg)}</text>
+        <text x="${xRightBadge+12}" y="${oy+49}" font-size="11"
+              fill="var(--fg-soft)">${esc(truncate(info.childDescr || '', 30))}</text>
+        ${src.display ? `<text x="${xRightBadge+12}" y="${oy+66}" font-size="10" font-weight="600"
+              fill="${linkColor}">${esc(src.display)}</text>` : ''}
+        ${info.dt_child_eor ? `<text x="${xRightBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
+              fill="${linkColor}" text-anchor="end">${esc(info.dt_child_eor)}</text>` : ''}
+        <text x="${xRightBadge+sw-12}" y="${oy+49}" font-size="9" letter-spacing="1"
+              fill="var(--fg-mute)" text-anchor="end">${info.caseA ? 'LEGAME APERTO' : 'LEGAME CHIUSO'}</text>
+      </g>`;
+  });
+
+  svg += `</svg>`;
+  return `<div class="uml-wrap">${svg}</div>`;
+}
+
+function truncate(s, n){
+  if(!s) return '';
+  if(s.length <= n) return s;
+  return s.slice(0, n-1) + '…';
+}
+
+/* Build a tagged SOURCE label centered on the bezier connecting (x1,y1)→(x2,y2).
+   The label is rendered as a rectangle with text inside, so it remains readable
+   even when the arrow runs underneath. If multiple sources exist, the first one
+   is shown plus "+N" when there are more — the "+N" suffix is always preserved
+   even when the source name is very long. */
+// Returns { display, tooltip } for a badge's SOURCE row.
+// display: short "LINK: <src>  +N" string for the badge body
+// tooltip: full multi-line listing for the SVG <title> element
+function sourceForBadge(sources){
+  if(!sources || !sources.length) return { display: '', tooltip: '' };
+  const suffix = sources.length > 1 ? '  +' + (sources.length - 1) : '';
+  const MAX_TOTAL = 28;
+  const maxSrcLen = Math.max(8, MAX_TOTAL - suffix.length - 6); // -6 for "LINK: " prefix
+  const firstSrc = truncate(sources[0] || '', maxSrcLen);
+  const display = 'LINK: ' + firstSrc + suffix;
+  // tooltip: numbered list of every source, joined with real newline
+  // (built at runtime via String.fromCharCode to avoid escape-sequence patterns
+  //  that some corporate proxies/AVs misinterpret as line-endings)
+  const NL = String.fromCharCode(10);
+  const tooltip = sources.length === 1
+    ? sources[0]
+    : sources.map((s, i) => (i+1) + '. ' + s).join(NL);
+  return { display, tooltip };
+}
+
+// Legacy wrapper (kept for any external caller)
+// Legacy wrapper kept for any callers using the old name
+function openParentView(parentNdg){ openLinkView(parentNdg); }
+
+// Compute the "own EoR" of a node: max effective DT_EOR among NON-LINK rows.
+// If the node has no non-LINK rows, fall back to the max effective DT_EOR overall.
+function computeOwnEor(rows){
+  const owns = rows.filter(r => r.REL_TYPE !== 'LINK');
+  const pool = owns.length ? owns : rows;
+  let best = null;
+  for(const r of pool){
+    const dt = effectiveDtEor(r);
+    if(!best || dt > best) best = dt;
+  }
+  return best;
+}
+function computeParentEor(parentRows){
+  return computeOwnEor(parentRows);
+}
+
+function buildChildLinkInfo(parentNdg, childNdg){
+  const childRows = (S.full.byNdg && S.full.byNdg.get(childNdg)) || [];
+  if(!childRows.length) return null;
+  // LINK rows from this child to this specific parent
+  const linkRows = childRows.filter(r => r.REL_TYPE === 'LINK' && r.PARENT === parentNdg);
+  if(!linkRows.length) return null;
+  // DT_INILINK: earliest start across the link rows
+  const inis = linkRows.map(r => r.DT_INILINK).filter(Boolean).sort();
+  const dt_inilink = inis[0] || null;
+  // DT_ENDLINK: if ANY link row has no DT_ENDLINK → the link is still open (someOpen=true)
+  const someOpen = linkRows.some(r => !r.DT_ENDLINK);
+  const ends = linkRows.map(r => r.DT_ENDLINK).filter(Boolean).sort();
+  const dt_endlink = someOpen ? null : (ends.length ? ends[ends.length-1] : null);
+  // SOURCE labels: collect distinct link reasons (for the tooltip / future use)
+  const sources = Array.from(new Set(linkRows.map(r => r.SOURCE || ''))).filter(Boolean);
+  // CHILD's own rapporti: max effective DT_EOR among non-LINK rows of the child
+  const dt_child_own = computeOwnEor(childRows);
+  // CHILD's master EoR: the max effective DT_EOR considering all rows of the child
+  let dt_child_eor = null;
+  for(const r of childRows){
+    const dt = effectiveDtEor(r);
+    if(!dt_child_eor || dt > dt_child_eor) dt_child_eor = dt;
+  }
+  // PARENT's own EoR
+  const parentRows = (S.full.byNdg && S.full.byNdg.get(parentNdg)) || [];
+  const dt_parent_own = computeOwnEor(parentRows);
+  const parentDescr = parentRows.length ? (parentRows[0].DESCR || '') : '';
+  const childDescr = childRows.length ? (childRows[0].DESCR || '') : '';
+  // Determine the case:
+  //   A) Link still alive when parent reaches its EoR → child INHERITS parent's EoR
+  //   B) Link ended BEFORE parent's EoR              → child stops at end-of-link
+  let caseA = false;
+  if(someOpen) caseA = true;
+  else if(dt_endlink && dt_parent_own && dt_endlink >= dt_parent_own) caseA = true;
+  return {
+    parentNdg, childNdg, parentDescr, childDescr,
+    dt_inilink, dt_endlink, dt_child_own, dt_parent_own, dt_child_eor,
+    caseA, someOpen, sources,
+  };
+}
+
+function renderLinkDiagram(info, parentEor, domain){
+  const W = 1000, H = 200;          // SVG viewBox dimensions
+  const LEFT = 200, RIGHT = 940;    // X-axis pixel range
+  const span = domain.maxY - domain.minY;
+  function xOf(iso){
+    if(!iso) return null;
+    const y = parseInt(iso.slice(0,4));
+    const m = parseInt(iso.slice(5,7)) || 1;
+    const d = parseInt(iso.slice(8,10)) || 1;
+    const frac = (m - 1)/12 + (d - 1)/365;
+    return LEFT + (((y - domain.minY) + frac) / span) * (RIGHT - LEFT);
+  }
+  // The three timeline rows
+  const yParent = 70, yLink = 105, yChild = 140;
+  // Colors via CSS variables (so they adapt to theme)
+  const colParent = 'currentColor';  // dark text
+  const colLink   = info.caseA ? 'var(--red)' : 'var(--link-bd)';
+  const colChild  = 'var(--fg-mute)';
+  const colAxis   = 'var(--line)';
+  const colText   = 'var(--fg-soft)';
+  const colTextSt = 'var(--fg)';
+
+  // Bar coordinates
+  // PARENT bar: full lifetime → from minY to parent's own EoR
+  const xParentEnd = xOf(parentEor || info.dt_parent_own) ?? RIGHT;
+  // LINK bar: from DT_INILINK to (DT_ENDLINK || parentEor in case A)
+  const xLinkStart = info.dt_inilink ? xOf(info.dt_inilink) : LEFT + 40;
+  const xLinkEnd = info.someOpen
+    ? xParentEnd
+    : (info.dt_endlink ? xOf(info.dt_endlink) : xParentEnd);
+  // CHILD bar: from minY to dt_child_own
+  const xChildEnd = xOf(info.dt_child_own) ?? LEFT;
+  // Inherited-line (dashed, case A only): from xLinkEnd to xParentEnd, then arrow down to child level
+  // Final EoR computed
+  const finalEor = info.caseA
+    ? (parentEor || info.dt_parent_own || info.dt_child_own)
+    : maxIso(info.dt_child_own, info.dt_endlink);
+  // X-axis year ticks
+  let ticks = '';
+  for(let y = domain.minY; y <= domain.maxY; y += 2){
+    const x = xOf(y + '-01-01');
+    ticks += `<line x1="${x}" y1="${H-30}" x2="${x}" y2="${H-26}" stroke="${colAxis}"/>
+              <text x="${x}" y="${H-12}" font-size="11" text-anchor="middle" fill="${colText}">${y}</text>`;
+  }
+  // Build labels
+  const lblParentEor = parentEor ? `EoR(PARENT) = ${parentEor.slice(0,4)}` : '';
+  const lblStart = info.dt_inilink ? `inizio legame ${info.dt_inilink}` : '';
+  const lblEnd = info.someOpen
+    ? 'ancora in essere'
+    : (info.dt_endlink ? `fine legame ${info.dt_endlink}` : '');
+  const lblChildOwn = info.dt_child_own ? `propri rapp. ${info.dt_child_own.slice(0,4)}` : '';
+  // Case-A inheritance dashed line and arrow
+  let inheritFx = '';
+  if(info.caseA && xParentEnd != null){
+    const x1 = xParentEnd, x2 = xParentEnd, y1 = yLink + 6, y2 = yChild - 6;
+    inheritFx = `
+      <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+            stroke="var(--red)" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <polygon points="${x2-4},${y2-1} ${x2+4},${y2-1} ${x2},${y2+5}" fill="var(--red)"/>
+      <text x="${x1 + 14}" y="${(y1+y2)/2 + 4}" font-size="11" font-style="italic" fill="var(--red)">eredità</text>`;
+  }
+
+  const eorEqText = info.caseA
+    ? `EoR(CHILD) = EoR(PARENT) = <b>${esc(finalEor || '—')}</b>`
+    : `EoR(CHILD) = MAX( propria ${esc(info.dt_child_own || '—')} ; fine legame ${esc(info.dt_endlink || '—')} ) = <b>${esc(finalEor || '—')}</b>`;
+
+  const svg = `
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <!-- timeline axis baseline -->
+      <line x1="${LEFT}" y1="${H-30}" x2="${RIGHT}" y2="${H-30}" stroke="${colAxis}"/>
+      ${ticks}
+      <!-- row labels -->
+      <text x="${LEFT-12}" y="${yParent+4}" font-size="12" text-anchor="end" fill="${colTextSt}" font-weight="600">Rapporti del PARENT</text>
+      <text x="${LEFT-12}" y="${yLink+4}"   font-size="12" text-anchor="end" fill="${info.caseA ? 'var(--red)' : 'var(--link-bd)'}" font-weight="600">Legame CHILD ↔ PARENT</text>
+      <text x="${LEFT-12}" y="${yChild+4}"  font-size="12" text-anchor="end" fill="${colTextSt}" font-weight="600">Rapporti del CHILD</text>
+      <!-- Parent bar -->
+      <line x1="${LEFT}" y1="${yParent}" x2="${xParentEnd}" y2="${yParent}" stroke="${colParent}" stroke-width="6" stroke-linecap="square"/>
+      <circle cx="${xParentEnd}" cy="${yParent}" r="5" fill="var(--red)"/>
+      ${lblParentEor ? `<text x="${xParentEnd}" y="${yParent-10}" font-size="11" fill="var(--red)" text-anchor="end" font-weight="600">${esc(lblParentEor)}</text>` : ''}
+      <!-- Link bar -->
+      <line x1="${xLinkStart}" y1="${yLink}" x2="${xLinkEnd}" y2="${yLink}" stroke="${colLink}" stroke-width="6" stroke-linecap="square"/>
+      ${info.dt_inilink ? `<circle cx="${xLinkStart}" cy="${yLink}" r="4.5" fill="none" stroke="${colLink}" stroke-width="2"/>` : ''}
+      ${info.caseA
+        ? '' /* in case A the link bar reaches xParentEnd; no further marker */
+        : `<circle cx="${xLinkEnd}" cy="${yLink}" r="4.5" fill="none" stroke="${colLink}" stroke-width="2"/>`}
+      ${info.someOpen ? `<text x="${xLinkEnd}" y="${yLink-9}" font-size="11" fill="${colLink}" text-anchor="end" font-weight="600">ancora in essere</text>` : ''}
+      <!-- Child bar -->
+      <line x1="${LEFT}" y1="${yChild}" x2="${xChildEnd}" y2="${yChild}" stroke="${colChild}" stroke-width="6" stroke-linecap="square"/>
+      <circle cx="${xChildEnd}" cy="${yChild}" r="4.5" fill="none" stroke="${colChild}" stroke-width="2"/>
+      ${lblChildOwn ? `<text x="${xChildEnd}" y="${yChild+18}" font-size="11" fill="${colText}" text-anchor="middle">${esc(lblChildOwn)}</text>` : ''}
+      <!-- Case-A inheritance effect -->
+      ${inheritFx}
+    </svg>`;
+
+  // Header pill with link dates (positioned outside the SVG to avoid overlap)
+  const startTxt = info.dt_inilink ? info.dt_inilink : '—';
+  const endTxt   = info.someOpen ? 'ancora in essere' : (info.dt_endlink || '—');
+  const linkDates = `<span class="link-dates ${info.caseA ? 'A' : 'B'}">inizio legame ${esc(startTxt)}  ·  fine legame ${esc(endTxt)}</span>`;
+
+  return `
+    <div class="child-card">
+      <div class="head">
+        <span class="ndg">CHILD ► ${esc(info.childNdg)}</span>
+        <span class="descr">${esc(info.childDescr || '')}</span>
+        <span class="badge-case ${info.caseA ? 'A' : 'B'}">${info.caseA ? 'LEGAME ATTIVO ALLA EoR' : 'LEGAME CHIUSO PRIMA DELLA CHIUSURA DEI RAPPORTI DIRETTI'}</span>
+        ${linkDates}
+      </div>
+      ${svg}
+      <div class="eor-formula">${eorEqText}</div>
+    </div>`;
+}
+
+function maxIso(a, b){
+  if(!a) return b || null;
+  if(!b) return a || null;
+  return a > b ? a : b;
+}
+
+function recomputeDetail(){
+  filterDetail();
+  S.detail.view = sortDetail(S.detail.view);
+  renderActiveChipsDetail();
+  renderDetailGrid();
+  document.getElementById('stat-detail-shown').textContent = S.detail.view.length.toLocaleString('it');
+  document.getElementById('stat-detail-total').textContent = S.full.rows.length.toLocaleString('it');
+}
+
+function filterDetail(){
+  const search = S.detail.search.toLowerCase();
+  const colFPlain = [];
+  const colFRange = [];
+  for(const [c, v] of Object.entries(S.detail.colFilters)){
+    if(v && typeof v === 'object' && ('from' in v || 'to' in v)) colFRange.push([c, v]);
+    else colFPlain.push([c, String(v).toLowerCase()]);
+  }
+  // Fast path: only NDG filter set AND the value is an exact NDG → use the pre-built index.
+  // Otherwise (substring match), fall through to the generic filter.
+  if(S.detail.colFilters.NDG && !search && Object.keys(S.detail.colFilters).length === 1 && colFRange.length === 0){
+    const ndgVal = S.detail.colFilters.NDG;
+    if(S.full.byNdg.has(ndgVal)){
+      S.detail.view = S.full.byNdg.get(ndgVal).slice();
+      return;
+    }
+    // not an exact match → continue to generic substring filter
+  }
+  // Generic filter — Detail shows complete data; retention cut-off is NOT applied here
+  S.detail.view = S.full.rows.filter(r => {
+    if(search){
+      let any = false;
+      for(const c of COLS){
+        const v = r[c];
+        if(v != null && String(v).toLowerCase().includes(search)){ any = true; break; }
+      }
+      if(!any) return false;
+    }
+    for(const [c,v] of colFPlain){
+      const cell = r[c]; if(cell == null) return false;
+      if(!String(cell).toLowerCase().includes(v)) return false;
+    }
+    for(const [c, rng] of colFRange){
+      const cell = r[c]; if(cell == null) return false;
+      const cs = String(cell);
+      if(rng.from && cs < rng.from) return false;
+      if(rng.to   && cs > rng.to)   return false;
+    }
+    return true;
+  });
+}
+
+function renderActiveChipsDetail(){
+  const el = document.getElementById('active-filters-detail');
+  const chips = [];
+  if(S.detail.search) chips.push(['ricerca', S.detail.search, () => {
+    S.detail.search = ''; document.getElementById('search-detail').value = ''; recomputeDetail();
+  }]);
+  for(const [c, v] of Object.entries(S.detail.colFilters)){
+    const isRange = v && typeof v === 'object' && ('from' in v || 'to' in v);
+    const cLabel = (COL_HINTS[c] && COL_HINTS[c].label) || c;
+    chips.push([cLabel, isRange ? formatDateRange(v) : v, () => {
+      delete S.detail.colFilters[c];
+      // Clear text-style inputs
+      document.querySelectorAll('#head-detail .col-filter').forEach(i => { if(i.dataset.col === c) i.value = ''; });
+      // Clear range inputs
+      document.querySelectorAll(`#head-detail .col-filter-range > input[data-col="${c}"]`).forEach(i => { i.value = ''; });
+      // If the user removed the NDG filter, hide the origin label
+      if(c === 'NDG') {
+        document.getElementById('detail-origin-sep').style.display = 'none';
+        document.getElementById('detail-origin-lbl').style.display = 'none';
+        document.getElementById('detail-ndg').textContent = '(vista libera)';
+      }
+      recomputeDetail();
+    }]);
+  }
+  if(!chips.length){ el.classList.remove('on'); el.innerHTML = ''; return; }
+  el.classList.add('on');
+  el.innerHTML = '<span style="font-weight:600">Filtri attivi:</span>' +
+    chips.map((c, i) => `<span class="chip"><b>${esc(c[0])}</b> = ${esc(c[1])} <span class="x" data-i="${i}">×</span></span>`).join('');
+  el.querySelectorAll('.x').forEach((x, i) => x.addEventListener('click', () => chips[i][2]()));
+}
+
+/* ---------- COLUMN WIDTHS (persisted) ---------- */
+const WIDTH_STORE_KEY = 'eor-col-widths-v3';
+function loadColWidths(){
+  try {
+    const raw = localStorage.getItem(WIDTH_STORE_KEY);
+    if(!raw) return;
+    const obj = JSON.parse(raw);
+    for(const k in obj){
+      if(COL_HINTS[k] && typeof obj[k] === 'number' && obj[k] >= 40 && obj[k] <= 1600){
+        COL_HINTS[k].width = obj[k];
+      }
+    }
+  } catch(e){}
+}
+function saveColWidth(col, w){
+  let obj = {};
+  try { obj = JSON.parse(localStorage.getItem(WIDTH_STORE_KEY) || '{}'); } catch(e){}
+  obj[col] = w;
+  localStorage.setItem(WIDTH_STORE_KEY, JSON.stringify(obj));
+}
+function setColumnWidth(col, w){
+  w = Math.max(40, Math.min(1600, Math.round(w)));
+  COL_HINTS[col].width = w;
+  // update head cells in both views
+  document.querySelectorAll(`.grid-head .cell[data-col="${col}"]`).forEach(c => { c.style.width = w + 'px'; });
+  // update body cells (currently rendered virtual rows)
+  document.querySelectorAll(`.virtual-row .cell[data-col="${col}"]`).forEach(c => { c.style.width = w + 'px'; });
+}
+
+/* ---------- GRID HEAD ---------- */
+function buildHead(elId, target){
+  // target = 'master' or 'detail'
+  const isMaster = (target === 'master');
+  const el = document.getElementById(elId); el.innerHTML = '';
+  const cols = colsFor(target);
+  for(const col of cols){
+    const w = COL_HINTS[col].width;
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.dataset.col = col;
+    cell.style.width = w + 'px'; cell.style.flexShrink = '0';
+    const isLast = col === cols[cols.length - 1];
+    const filterHtml = (col === 'DT_EOR')
+      ? `<div class="col-filter-range" data-col="${esc(col)}">
+           <input data-col="${esc(col)}" data-range="from" placeholder="dal…" title="dal, formato AAAA o AAAA-MM o AAAA-MM-GG">
+           <input data-col="${esc(col)}" data-range="to"   placeholder="al…"  title="al, formato AAAA o AAAA-MM o AAAA-MM-GG">
+         </div>`
+      : `<input class="col-filter" data-col="${esc(col)}" placeholder="filtra…">`;
+    cell.innerHTML = `
+      <div class="sort-trig" data-col="${esc(col)}" title="${esc(col)}">
+        <span>${esc(COL_HINTS[col].label || col)}</span>
+        <span class="sort-i">↕</span>
+      </div>
+      ${filterHtml}
+      ${!isLast ? `<div class="resizer" data-col="${esc(col)}" title="Trascina per ridimensionare · doppio click per reset"></div>` : ''}
+    `;
+    el.appendChild(cell);
+  }
+  // Sort handlers — only on master; detail sort is fixed
+  el.querySelectorAll('.sort-trig').forEach(t => {
+    t.addEventListener('click', () => {
+      if(!isMaster) return;
+      const col = t.dataset.col;
+      if(S.master.sortCol === col) S.master.sortDir = S.master.sortDir === 'asc' ? 'desc' : 'asc';
+      else { S.master.sortCol = col; S.master.sortDir = 'asc'; }
+      updateSortIndicators('head-master', S.master.sortCol, S.master.sortDir);
+      sortMaster(); renderMasterGrid();
+    });
+  });
+  // Plain (text) filter handlers
+  el.querySelectorAll('.col-filter').forEach(inp => {
+    inp.addEventListener('input', debounce(() => {
+      const col = inp.dataset.col, v = inp.value.trim();
+      const state = isMaster ? S.master : S.detail;
+      if(v) state.colFilters[col] = v;
+      else delete state.colFilters[col];
+      // If user types into NDG filter on detail and clears it, hide origin label
+      if(!isMaster && col === 'NDG' && !v){
+        document.getElementById('detail-origin-sep').style.display = 'none';
+        document.getElementById('detail-origin-lbl').style.display = 'none';
+        document.getElementById('detail-ndg').textContent = '(vista libera)';
+      }
+      if(isMaster) recomputeMaster();
+      else        recomputeDetail();
+    }, 200));
+  });
+  // Date-range filter handlers (DT_EOR)
+  el.querySelectorAll('.col-filter-range > input').forEach(inp => {
+    inp.addEventListener('input', debounce(() => {
+      const col = inp.dataset.col;
+      const state = isMaster ? S.master : S.detail;
+      const parent = inp.closest('.col-filter-range');
+      const fromIn = parent.querySelector('input[data-range="from"]').value.trim();
+      const toIn   = parent.querySelector('input[data-range="to"]').value.trim();
+      const from = expandDateFrom(fromIn);
+      const to   = expandDateTo(toIn);
+      if(from || to) state.colFilters[col] = { from, to };
+      else delete state.colFilters[col];
+      if(isMaster) recomputeMaster();
+      else         recomputeDetail();
+    }, 200));
+  });
+  // Resize handlers
+  el.querySelectorAll('.resizer').forEach(r => {
+    r.addEventListener('mousedown', e => startColResize(e, r));
+    r.addEventListener('dblclick', e => {
+      const col = r.dataset.col;
+      const defaults = {CODCLI:90, NDG:90, DESCR:220, PARENT:90, DT_INILINK:110, DT_ENDLINK:110, DT_EOR:110, SOURCE:300, REL_TYPE:100, CS_APP:100};
+      const def = defaults[col] || 130;
+      setColumnWidth(col, def);
+      saveColWidth(col, def);
+    });
+  });
+  if(isMaster) updateSortIndicators('head-master', S.master.sortCol, S.master.sortDir);
+}
+
+function startColResize(e, handle){
+  e.preventDefault(); e.stopPropagation();
+  const col = handle.dataset.col;
+  const startX = e.clientX;
+  const startW = COL_HINTS[col].width;
+  handle.classList.add('dragging');
+  document.body.classList.add('col-resizing');
+  // Also highlight the twin handle in the other view, if present
+  document.querySelectorAll(`.grid-head .resizer[data-col="${col}"]`).forEach(h => h.classList.add('dragging'));
+
+  function onMove(ev){
+    const dx = ev.clientX - startX;
+    setColumnWidth(col, startW + dx);
+  }
+  function onUp(){
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.classList.remove('col-resizing');
+    document.querySelectorAll(`.grid-head .resizer[data-col="${col}"]`).forEach(h => h.classList.remove('dragging'));
+    saveColWidth(col, COL_HINTS[col].width);
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function updateSortIndicators(elId, col, dir){
+  document.getElementById(elId).querySelectorAll('.sort-trig').forEach(t => {
+    if(t.dataset.col === col){ t.classList.add('sorted'); t.querySelector('.sort-i').textContent = dir === 'asc' ? '↑' : '↓'; }
+    else { t.classList.remove('sorted'); t.querySelector('.sort-i').textContent = '↕'; }
+  });
+}
+
+/* ---------- RETENTION CUT-OFF (shared between views) ---------- */
+function onCutoffChange(raw){
+  const expanded = expandDateFrom(raw) || null;
+  S.dateMin = expanded;
+  // Recompute master rows (vincente reduction depends on cut-off).
+  // Detail is NOT affected: it always shows complete data scoped only by the user's filters.
+  deriveMasterRows();
+  if(document.getElementById('view-master').classList.contains('on')) recomputeMaster();
+  // Update header info
+  document.getElementById('job-info').textContent =
+    `${S.full.rows.length.toLocaleString('it')} righe totali  ·  ${S.master.rows.length.toLocaleString('it')} NDG con EoR post-cutoff`;
+}
+document.getElementById('date-cutoff-master').addEventListener('input', debounce(e => onCutoffChange(e.target.value), 250));
+
+/* ---------- MASTER PIPELINE ---------- */
+document.getElementById('search-master').addEventListener('input', debounce(e => {
+  S.master.search = e.target.value; recomputeMaster();
+}, 250));
+document.getElementById('btn-master-reset').addEventListener('click', () => {
+  S.master.search = ''; S.master.colFilters = {}; S.master.drilldown = {};
+  document.getElementById('search-master').value = '';
+  document.querySelectorAll('#head-master .col-filter').forEach(i => i.value = '');
+  document.querySelectorAll('#head-master .col-filter-range > input').forEach(i => i.value = '');
+  // Restore default cut-off
+  S.dateMin = '2016-06-30';
+  document.getElementById('date-cutoff-master').value = S.dateMin;
+  deriveMasterRows();
+  recomputeMaster();
+});
+document.getElementById('btn-master-export').addEventListener('click', () => exportCsv(S.master.view, 'eormaster_view', 'master'));
+document.getElementById('btn-detail-export').addEventListener('click', () => {
+  const name = (S.detail.colFilters.NDG && Object.keys(S.detail.colFilters).length === 1 && !S.detail.search)
+    ? 'eorfull_NDG_' + S.detail.colFilters.NDG
+    : 'eorfull_view';
+  exportCsv(S.detail.view, name, 'detail');
+});
+document.getElementById('search-detail').addEventListener('input', debounce(e => {
+  S.detail.search = e.target.value; recomputeDetail();
+}, 250));
+document.getElementById('btn-detail-reset').addEventListener('click', () => {
+  S.detail.search = ''; S.detail.colFilters = {};
+  document.getElementById('search-detail').value = '';
+  document.querySelectorAll('#head-detail .col-filter').forEach(i => i.value = '');
+  document.querySelectorAll('#head-detail .col-filter-range > input').forEach(i => i.value = '');
+  document.getElementById('detail-origin-sep').style.display = 'none';
+  document.getElementById('detail-origin-lbl').style.display = 'none';
+  document.getElementById('detail-ndg').textContent = '(vista libera)';
+  recomputeDetail();
+});
+
+function recomputeMaster(){
+  filterMaster(); sortMaster();
+  computeMasterAggs(); renderActiveChips();
+  renderMasterGrid(); updateMasterStats();
+}
+function filterMaster(){
+  const search = S.master.search.toLowerCase();
+  // Split filters into "plain" (string includes) vs "range" (date {from,to})
+  const colFPlain = [];
+  const colFRange = [];
+  for(const [c, v] of Object.entries(S.master.colFilters)){
+    if(v && typeof v === 'object' && ('from' in v || 'to' in v)) colFRange.push([c, v]);
+    else colFPlain.push([c, String(v).toLowerCase()]);
+  }
+  const drill = Object.entries(S.master.drilldown);
+  const masterCols = colsFor('master');
+  S.master.view = S.master.rows.filter(r => {
+    if(search){
+      let any = false;
+      for(const c of masterCols){
+        const v = r[c];
+        if(v != null && String(v).toLowerCase().includes(search)){ any = true; break; }
+      }
+      if(!any) return false;
+    }
+    for(const [c,v] of colFPlain){
+      const cell = r[c]; if(cell == null) return false;
+      if(!String(cell).toLowerCase().includes(v)) return false;
+    }
+    for(const [c, rng] of colFRange){
+      const cell = r[c]; if(cell == null) return false;
+      const cs = String(cell);
+      if(rng.from && cs < rng.from) return false;
+      if(rng.to   && cs > rng.to)   return false;
+    }
+    for(const [c,v] of drill){ if(String(r[c]) !== String(v)) return false; }
+    return true;
+  });
+}
+function sortMaster(){
+  if(!S.master.sortCol) return;
+  const col = S.master.sortCol;
+  const dir = S.master.sortDir === 'asc' ? 1 : -1;
+  const type = COL_HINTS[col].type;
+  S.master.view.sort((a,b) => {
+    const va = a[col], vb = b[col];
+    if(va == null && vb == null) return 0;
+    if(va == null) return 1;
+    if(vb == null) return -1;
+    if(type === 'number') return (Number(va) - Number(vb)) * dir;
+    return String(va).localeCompare(String(vb)) * dir;
+  });
+}
+function updateMasterStats(){
+  document.getElementById('stat-master-shown').textContent = S.master.view.length.toLocaleString('it');
+  document.getElementById('stat-master-total').textContent = S.master.rows.length.toLocaleString('it');
+}
+
+/* ---------- AGGREGATIONS ---------- */
+function computeMasterAggs(){
+  const csa = countBy(S.master.view, 'CS_APP');
+  const rel = countBy(S.master.view, 'REL_TYPE');
+  renderKVPanel('panel-src', csa, 'CS_APP');
+  renderKVPanel('panel-reltype', rel, 'REL_TYPE', { renderLabel: renderRelType });
+  renderYearChart(computeYearAgg(S.master.view));
+}
+function countBy(rows, col){
+  const m = new Map();
+  for(const r of rows){
+    let k = r[col]; if(k == null || k === '') k = '(vuoto)';
+    m.set(k, (m.get(k) || 0) + 1);
+  }
+  return Array.from(m.entries()).sort((a,b) => b[1] - a[1]);
+}
+function computeYearAgg(rows){
+  const m = new Map();
+  for(const r of rows){
+    const v = r.DT_EOR;
+    if(!v) continue;
+    const y = String(v).slice(0,4);
+    if(!/^\d{4}$/.test(y)) continue;
+    m.set(y, (m.get(y) || 0) + 1);
+  }
+  return Array.from(m.entries()).sort((a,b) => a[0].localeCompare(b[0]));
+}
+function renderKVPanel(panelId, entries, drillCol, opts={}){
+  const el = document.getElementById(panelId);
+  if(!entries.length){ el.innerHTML = '<div style="color:var(--fg-mute); font-size:11px; padding:4px">— nessun dato —</div>'; return; }
+  const total = entries.reduce((s, [,c]) => s + c, 0);
+  const max = entries[0][1];
+  el.innerHTML = '';
+  for(const [k, c] of entries){
+    const div = document.createElement('div');
+    const isActive = S.master.drilldown[drillCol] != null && String(S.master.drilldown[drillCol]) === String(k);
+    div.className = 'kv' + (isActive ? ' active' : '');
+    const labelHtml = opts.renderLabel ? opts.renderLabel(k) : esc(k);
+    const pct = (c / total * 100).toFixed(1);
+    const barPct = (c / max * 100);
+    div.innerHTML = `
+      <div>
+        <div class="kv-row"><span class="kv-k">${labelHtml}</span><span class="kv-c">${c.toLocaleString('it')}  ·  ${pct}%</span></div>
+        <div class="bar"><div style="width:${barPct}%"></div></div>
+      </div>`;
+    div.addEventListener('click', () => {
+      if(S.master.drilldown[drillCol] != null && String(S.master.drilldown[drillCol]) === String(k)) delete S.master.drilldown[drillCol];
+      else S.master.drilldown[drillCol] = k;
+      recomputeMaster();
+    });
+    el.appendChild(div);
+  }
+}
+
+function renderYearChart(entries){
+  const ctx = document.getElementById('chart-year');
+  const labels = entries.map(e => e[0]);
+  const data = entries.map(e => e[1]);
+  const red = cssVar('--red') || '#e60000';
+  const fgSoft = cssVar('--fg-soft') || '#555';
+  const lineCol = cssVar('--line') || '#e4e4e4';
+  if(S.master.yearChart) S.master.yearChart.destroy();
+  S.master.yearChart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets: [{
+      data, borderWidth:0, borderRadius:1, maxBarThickness:18,
+      backgroundColor: ctx2 => {
+        const y = labels[ctx2.dataIndex];
+        if(y === '1970' || y === '2035') return cssVar('--fg-mute') || '#888';
+        if(y === '2025') return red;
+        return fgSoft;
+      },
+    }]},
+    options: {
+      maintainAspectRatio: false, responsive: true,
+      plugins: { legend: { display:false }, tooltip: { callbacks: { label: c => `${c.raw.toLocaleString('it')} righe` } } },
+      scales: {
+        x: { ticks: { font:{size:10}, color: fgSoft, maxRotation:0 }, grid: { display:false } },
+        y: { ticks: { font:{size:10}, color: fgSoft, callback: v => v >= 1000 ? (v/1000).toFixed(0)+'k' : v }, grid: { color: lineCol } }
+      },
+      onClick: (e, els) => {
+        if(els && els[0]){
+          const year = labels[els[0].index];
+          const curr = S.master.colFilters.DT_EOR;
+          const isSameYear = (curr && typeof curr === 'object' && curr.from === year + '-01-01' && curr.to === year + '-12-31');
+          if(isSameYear){
+            delete S.master.colFilters.DT_EOR;
+          } else {
+            S.master.colFilters.DT_EOR = { from: year + '-01-01', to: year + '-12-31' };
+          }
+          // Sync range inputs
+          const newF = S.master.colFilters.DT_EOR;
+          document.querySelectorAll('#head-master .col-filter-range > input').forEach(i => {
+            if(i.dataset.col !== 'DT_EOR') return;
+            if(i.dataset.range === 'from') i.value = newF ? newF.from : '';
+            if(i.dataset.range === 'to')   i.value = newF ? newF.to   : '';
+          });
+          recomputeMaster();
+        }
+      }
+    }
+  });
+}
+
+function renderActiveChips(){
+  const el = document.getElementById('active-filters-master');
+  const chips = [];
+  if(S.master.search) chips.push(['ricerca', S.master.search, () => {
+    S.master.search = ''; document.getElementById('search-master').value = ''; recomputeMaster();
+  }]);
+  for(const [c, v] of Object.entries(S.master.colFilters)){
+    const isRange = v && typeof v === 'object' && ('from' in v || 'to' in v);
+    const cLabel = (COL_HINTS[c] && COL_HINTS[c].label) || c;
+    chips.push([cLabel, isRange ? formatDateRange(v) : v, () => {
+      delete S.master.colFilters[c];
+      document.querySelectorAll('#head-master .col-filter').forEach(i => { if(i.dataset.col === c) i.value = ''; });
+      document.querySelectorAll(`#head-master .col-filter-range > input[data-col="${c}"]`).forEach(i => { i.value = ''; });
+      recomputeMaster();
+    }]);
+  }
+  for(const [c, v] of Object.entries(S.master.drilldown)){
+    const cLabel = (COL_HINTS[c] && COL_HINTS[c].label) || c;
+    chips.push([cLabel, v, () => { delete S.master.drilldown[c]; recomputeMaster(); }]);
+  }
+  if(!chips.length){ el.classList.remove('on'); el.innerHTML = ''; return; }
+  el.classList.add('on');
+  el.innerHTML = '<span style="font-weight:600">Filtri attivi:</span>' +
+    chips.map((c, i) => `<span class="chip"><b>${esc(c[0])}</b> = ${esc(c[1])} <span class="x" data-i="${i}">×</span></span>`).join('');
+  el.querySelectorAll('.x').forEach((x, i) => x.addEventListener('click', () => chips[i][2]()));
+}
+
+/* ---------- VIRTUAL GRIDS ---------- */
+const bodyM = document.getElementById('body-master');
+const spacerM = document.getElementById('spacer-master');
+const vpM = document.getElementById('viewport-master');
+const headM = document.getElementById('head-master');
+bodyM.addEventListener('scroll', () => {
+  headM.scrollLeft = bodyM.scrollLeft;
+  renderVisibleMaster();
+});
+
+function renderMasterGrid(){ spacerM.style.height = (S.master.view.length * ROW_H) + 'px'; bodyM.scrollTop = 0; renderVisibleMaster(); }
+function renderVisibleMaster(){
+  const total = S.master.view.length;
+  if(!total){
+    vpM.innerHTML = '<div class="empty"><b>Nessuna riga corrisponde ai filtri attivi</b>Modifica o azzera i filtri.</div>';
+    document.getElementById('render-stats').textContent = ''; return;
+  }
+  const scrollTop = bodyM.scrollTop;
+  const viewportH = bodyM.clientHeight;
+  const buffer = 5;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_H) - buffer);
+  const end = Math.min(total, Math.ceil((scrollTop + viewportH) / ROW_H) + buffer);
+  const t0 = performance.now();
+  let html = '';
+  const cols = colsFor('master');
+  for(let i = start; i < end; i++){
+    const r = S.master.view[i];
+    html += `<div class="virtual-row" data-i="${i}" style="top:${i*ROW_H}px; height:${ROW_H}px">`;
+    for(const col of cols){
+      const w = COL_HINTS[col].width;
+      const rend = COL_HINTS[col].render;
+      const v = r[col];
+      html += `<div class="cell" data-col="${col}" style="width:${w}px; flex-shrink:0">${rend ? rend(v) : esc(v)}</div>`;
+    }
+    html += `</div>`;
+  }
+  vpM.innerHTML = html;
+  vpM.querySelectorAll('.virtual-row').forEach(row => {
+    row.addEventListener('click', () => goToDetail(S.master.view[Number(row.dataset.i)]));
+  });
+  document.getElementById('render-stats').textContent = `${(end-start)} righe renderizzate in ${(performance.now()-t0).toFixed(0)}ms`;
+}
+
+const bodyD = document.getElementById('body-detail');
+const spacerD = document.getElementById('spacer-detail');
+const vpD = document.getElementById('viewport-detail');
+const headD = document.getElementById('head-detail');
+bodyD.addEventListener('scroll', () => {
+  headD.scrollLeft = bodyD.scrollLeft;
+  renderVisibleDetail();
+});
+// Click on a PARENT or NDG cell → open "Legami del NDG" for that NDG
+vpD.addEventListener('click', e => {
+  const cell = e.target.closest('.cell[data-col="PARENT"], .cell[data-col="NDG"]');
+  if(!cell) return;
+  const v = (cell.textContent || '').trim();
+  if(v) goToNode(v);
+});
+
+function renderDetailGrid(){ spacerD.style.height = (S.detail.view.length * ROW_H) + 'px'; bodyD.scrollTop = 0; renderVisibleDetail(); }
+function renderVisibleDetail(){
+  const total = S.detail.view.length;
+  if(!total){
+    vpD.innerHTML = `<div class="empty"><b>Nessuna riga corrisponde ai filtri attivi</b>Rimuovi qualche filtro per allargare la ricerca.</div>`;
+    return;
+  }
+  const scrollTop = bodyD.scrollTop;
+  const viewportH = bodyD.clientHeight;
+  const buffer = 5;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_H) - buffer);
+  const end = Math.min(total, Math.ceil((scrollTop + viewportH) / ROW_H) + buffer);
+  let html = '';
+  const cols = colsFor('detail');
+  for(let i = start; i < end; i++){
+    const r = S.detail.view[i];
+    const isMaster = (S.detail.highlightDt && r.DT_EOR === S.detail.highlightDt);
+    html += `<div class="virtual-row${isMaster ? ' master-row' : ''}" style="top:${i*ROW_H}px; height:${ROW_H}px">`;
+    for(const col of cols){
+      const w = COL_HINTS[col].width;
+      const rend = COL_HINTS[col].render;
+      const v = r[col];
+      html += `<div class="cell" data-col="${col}" style="width:${w}px; flex-shrink:0">${rend ? rend(v) : esc(v)}</div>`;
+    }
+    html += `</div>`;
+  }
+  vpD.innerHTML = html;
+}
+
+/* ---------- EXPORT ---------- */
+function exportCsv(rows, basename, view){
+  if(!rows.length) return;
+  const fields = view ? colsFor(view) : COLS;
+  const csv = Papa.unparse({ fields, data: rows.map(r => fields.map(c => r[c] ?? '')) });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${basename}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ---------- KEYBOARD ---------- */
+document.addEventListener('keydown', e => {
+  if((e.ctrlKey || e.metaKey) && e.key === 'k'){
+    e.preventDefault();
+    if(document.getElementById('view-master').classList.contains('on')) document.getElementById('search-master').focus();
+    else if(document.getElementById('view-detail').classList.contains('on')) document.getElementById('search-detail').focus();
+  } else if(e.key === 'Escape' && document.getElementById('view-detail').classList.contains('on')){
+    location.hash = '';
+  }
+});
+
+/* ---------- BOOT ---------- */
+document.getElementById('view-welcome').classList.add('on');
+</script>
+</body>
+</html>
