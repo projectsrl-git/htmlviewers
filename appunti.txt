@@ -147,63 +147,6 @@ function Test-NameChar {
     return ([char]::IsLetterOrDigit($c) -or $c -eq '_' -or $c -eq '-' -or $c -eq '.' -or $c -eq ':')
 }
 
-<#
-    Determines the parser state at the END of a line, using only native string
-    operations. Returns the element name currently open and whether the line ends
-    inside a tag or inside non-blank character data.
-#>
-function Get-LineEndState {
-    param(
-        [string] $Line,
-        [string] $PrevElement,
-        [bool]   $PrevInTag
-    )
-
-    $lastGt = $Line.LastIndexOf('>')
-    $lastLt = $Line.LastIndexOf('<')
-
-    $endsInTag = if ($lastLt -gt $lastGt) { $true }
-                 elseif ($lastLt -lt 0 -and $lastGt -lt 0) { $PrevInTag }
-                 else { $false }
-
-    # The element in scope is the last start tag on this line, if any.
-    $element = $PrevElement
-    $i = $Line.Length
-    while ($true) {
-        $i = $Line.LastIndexOf('<', [Math]::Max($i - 1, 0))
-        if ($i -lt 0) { break }
-        if ($i + 1 -lt $Line.Length) {
-            $c = $Line[$i + 1]
-            if ($c -eq '/') {
-                # Closing tag: nothing is open in character-data terms.
-                $element = ''
-                break
-            }
-            if ($c -ne '?' -and $c -ne '!') {
-                $j = $i + 1
-                while ($j -lt $Line.Length -and (Test-NameChar $Line[$j])) { $j++ }
-                $element = $Line.Substring($i + 1, $j - $i - 1)
-                # A self-closing tag leaves nothing open.
-                if ($lastGt -gt $i -and $lastGt -gt 0 -and $Line[$lastGt - 1] -eq '/') { $element = '' }
-                break
-            }
-        }
-        if ($i -eq 0) { break }
-    }
-
-    # Text following the last '>' on the line.
-    $tail = if ($endsInTag) { '' }
-            elseif ($lastGt -ge 0) { $Line.Substring($lastGt + 1) }
-            else { $Line }
-
-    return [pscustomobject]@{
-        EndsInTag   = $endsInTag
-        Element     = $element
-        TailIsBlank = [string]::IsNullOrWhiteSpace($tail)
-        Tail        = $tail
-    }
-}
-
 function Invoke-IndxScan {
     param(
         [System.IO.FileInfo]   $File,
@@ -217,7 +160,7 @@ function Invoke-IndxScan {
 
     $findings = New-Object 'System.Collections.Generic.List[psobject]'
     $reader = $null; $writer = $null; $fs = $null
-    $markupBreaks = 0; $valueBreaks = 0; $docCount = 0; $lineNo = 0
+    $markupBreaks = 0; $valueBreaks = 0; $docCount = 0; $lineNo = 0; $fastPath = 0
 
     try {
         $fs = New-Object System.IO.FileStream($File.FullName,
@@ -227,27 +170,27 @@ function Invoke-IndxScan {
         $reader = New-Object System.IO.StreamReader($fs, $Enc, $false, 1048576)
         if ($DoFix) { $writer = New-Object System.IO.StreamWriter($OutPath, $false, $Enc, 1048576) }
 
-        $total     = [double]$File.Length
-        $swFile    = [System.Diagnostics.Stopwatch]::StartNew()
-        $nextTick  = 500
+        $total    = [double]$File.Length
+        $swFile   = [System.Diagnostics.Stopwatch]::StartNew()
+        $nextTick = 2000
 
         $prevLine    = $null
-        $prevState   = $null
-        $prevElement = ''
+        # State of the break that FOLLOWS $prevLine.
+        $prevSafe    = $true
         $prevInTag   = $false
+        $prevTail    = ''
+        $curElement  = ''   # last start tag seen, carried across lines
 
         while ($null -ne ($line = $reader.ReadLine())) {
             $lineNo++
 
             if ($lineNo -ge $nextTick) {
-                $nextTick = $lineNo + 500
+                $nextTick = $lineNo + 2000
                 $pos  = [double]$fs.Position
                 $pct  = if ($total -gt 0) { [Math]::Min(100, ($pos / $total) * 100) } else { 0 }
                 $secs = $swFile.Elapsed.TotalSeconds
                 $mbps = if ($secs -gt 0) { ($pos / 1MB) / $secs } else { 0 }
-                $eta  = if ($mbps -gt 0 -and $pct -gt 0) {
-                            [TimeSpan]::FromSeconds((($total - $pos) / 1MB) / $mbps)
-                        } else { [TimeSpan]::Zero }
+                $eta  = if ($mbps -gt 0) { [TimeSpan]::FromSeconds((($total - $pos) / 1MB) / $mbps) } else { [TimeSpan]::Zero }
                 Write-Progress -Id 2 -ParentId 1 `
                     -Activity ("Reading {0}" -f $File.Name) `
                     -Status ("{0:n0}/{1:n0} MB  |  {2:n0} lines  |  {3:n1} MB/s  |  ETA {4:mm\:ss}" -f `
@@ -255,65 +198,100 @@ function Invoke-IndxScan {
                     -PercentComplete $pct
             }
 
-            # Cheap document counter: start tags on this line.
-            if ($line.IndexOf('<ELAR:Doc') -ge 0 -or $line.IndexOf(':Document>') -ge 0) {
-                $docCount++
-            }
-
+            # ---- emit the break between $prevLine and $line -------------------
             if ($null -ne $prevLine) {
-                # Classify the break BETWEEN prevLine and line.
-                $local = if ($prevState.Element) {
-                             $prevState.Element.Substring($prevState.Element.IndexOf(':') + 1)
-                         } else { '' }
-
-                $kind = if ($prevState.EndsInTag)      { 'MarkupLineBreak' }
-                        elseif ($prevState.TailIsBlank) { 'Safe' }
-                        elseif ($local -eq $ContentLocalName) { 'Safe' }
-                        else { 'TextLineBreak' }
-
-                if ($kind -eq 'Safe') {
+                if ($prevSafe) {
                     if ($DoFix) { $writer.Write($prevLine); $writer.Write("`n") }
                 }
                 else {
-                    if ($kind -eq 'MarkupLineBreak') { $markupBreaks++ } else { $valueBreaks++ }
+                    if ($prevInTag) { $markupBreaks++; $kind = 'MarkupLineBreak' }
+                    else            { $valueBreaks++;  $kind = 'TextLineBreak' }
 
-                    $val = if ($kind -eq 'TextLineBreak') {
-                               $prevState.Tail + '<LF>' + $line.Substring(0, [Math]::Min(40, $line.Length))
-                           } else {
-                               $prevLine.Substring([Math]::Max(0, $prevLine.Length - 40)) + '<LF>' +
-                               $line.Substring(0, [Math]::Min(40, $line.Length))
-                           }
-
+                    $head = if ($prevInTag) { $prevLine.Substring([Math]::Max(0, $prevLine.Length - 40)) } else { $prevTail }
                     $findings.Add([pscustomobject]@{
                         File    = $File.Name
                         Kind    = $kind
-                        Element = $prevState.Element
+                        Element = $curElement
                         Line    = ($lineNo - 1)
-                        Value   = $val
+                        Value   = $head + '<LF>' + $line.Substring(0, [Math]::Min(40, $line.Length))
                     })
 
                     if ($DoFix) {
                         $writer.Write($prevLine)
-                        # Inside markup the break may have been legal whitespace
-                        # between attributes; only rejoin when it split a token.
-                        if ($kind -eq 'MarkupLineBreak') {
+                        if ($prevInTag) {
                             $a = if ($prevLine.Length -gt 0) { $prevLine[$prevLine.Length - 1] } else { [char]0 }
                             $b = if ($line.Length -gt 0) { $line[0] } else { [char]0 }
                             if (-not ((Test-NameChar $a) -and (Test-NameChar $b))) { $writer.Write(' ') }
                         }
-                        # For a value break, join with nothing.
                     }
                 }
             }
 
-            $prevLine  = $line
-            $prevState = Get-LineEndState -Line $line -PrevElement $prevElement -PrevInTag $prevInTag
-            $prevElement = $prevState.Element
-            $prevInTag   = $prevState.EndsInTag
+            # ---- classify the state at the END of $line ------------------------
+            # Fast path: a line ending in '>' ends between elements, so the break
+            # after it can only be indentation. Roughly 97% of lines land here and
+            # need no further analysis.
+            if ($line.EndsWith('>')) {
+                $fastPath++
+                $prevSafe  = $true
+                $prevInTag = $false
+                $prevTail  = ''
+
+                # Still track the element, cheaply, for the lines that follow.
+                $lt = $line.LastIndexOf('<')
+                if ($lt -ge 0 -and $lt + 1 -lt $line.Length) {
+                    $c = $line[$lt + 1]
+                    if ($c -eq '/' -or $line[$line.Length - 2] -eq '/') {
+                        $curElement = ''
+                    }
+                    elseif ($c -ne '?' -and $c -ne '!') {
+                        $j = $lt + 1
+                        while ($j -lt $line.Length -and (Test-NameChar $line[$j])) { $j++ }
+                        $curElement = $line.Substring($lt + 1, $j - $lt - 1)
+                        if ($line.IndexOf('<ELAR:Doc') -ge 0) { $docCount++ }
+                    }
+                }
+            }
+            else {
+                $lastGt = $line.LastIndexOf('>')
+                $lastLt = $line.LastIndexOf('<')
+
+                if ($lastLt -gt $lastGt) {
+                    # Ends inside a tag.
+                    $prevInTag = $true
+                    $prevSafe  = $false
+                    $prevTail  = ''
+                }
+                else {
+                    $prevInTag = $false
+                    $tail = if ($lastGt -ge 0) { $line.Substring($lastGt + 1) } else { $line }
+                    $prevTail = $tail
+
+                    if ([string]::IsNullOrWhiteSpace($tail)) {
+                        $prevSafe = $true
+                    }
+                    else {
+                        # Update the element if this line opened one.
+                        if ($lastLt -ge 0 -and $lastLt + 1 -lt $line.Length) {
+                            $c = $line[$lastLt + 1]
+                            if ($c -eq '/') { $curElement = '' }
+                            elseif ($c -ne '?' -and $c -ne '!') {
+                                $j = $lastLt + 1
+                                while ($j -lt $line.Length -and (Test-NameChar $line[$j])) { $j++ }
+                                $curElement = $line.Substring($lastLt + 1, $j - $lastLt - 1)
+                            }
+                        }
+                        $local = if ($curElement) { $curElement.Substring($curElement.IndexOf(':') + 1) } else { '' }
+                        # Inside the Base64 payload the break is decoder-ignorable.
+                        $prevSafe = ($local -eq $ContentLocalName)
+                    }
+                }
+            }
+
+            $prevLine = $line
         }
 
         if ($DoFix -and $null -ne $prevLine) { $writer.Write($prevLine); $writer.Write("`n") }
-        Write-Progress -Id 2 -Activity 'Reading' -Completed
     }
     finally {
         Write-Progress -Id 2 -Activity 'Reading' -Completed
@@ -329,8 +307,10 @@ function Invoke-IndxScan {
         ValueBreaks  = $valueBreaks
         DocCount     = $docCount
         Lines        = $lineNo
+        FastPath     = $fastPath
     }
 }
+
 
 # ---------------------------------------------------------------------------
 
@@ -373,8 +353,9 @@ foreach ($f in $files) {
     $bad = $r.MarkupBreaks + $r.ValueBreaks
 
     if ($bad -eq 0) {
-        Write-Host ("  OK        {0,-44} {1,6} docs {2,7} lines {3,7:n1}s" -f `
-                    $f.Name, $r.DocCount, $r.Lines, $swOne.Elapsed.TotalSeconds) -ForegroundColor DarkGray
+        $fastPct = if ($r.Lines -gt 0) { ($r.FastPath / $r.Lines) * 100 } else { 0 }
+        Write-Host ("  OK        {0,-44} {1,6} docs {2,7} lines {3,7:n1}s  ({4:n0}% fast)" -f `
+                    $f.Name, $r.DocCount, $r.Lines, $swOne.Elapsed.TotalSeconds, $fastPct) -ForegroundColor DarkGray
         if ($Fix -and $tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Force }
         continue
     }
