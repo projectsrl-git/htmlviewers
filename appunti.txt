@@ -12,30 +12,30 @@
             harmless, Base64 decoders ignore whitespace
       - break inside element character data
             the metadata value silently gains a line feed ("PDF" -> "P<LF>DF")
-      - break inside a tag or attribute name
+      - break inside a tag or an attribute
             the file is not well-formed XML at all
 
-    Detection and repair both use a single streaming character scanner rather than
-    an XML parser, so malformed files are handled too, and a 150 MB INDX costs a few
-    MB of memory.
+    Why this is fast: corruption can only occur AT a line ending, and an INDX wrapped
+    at 20000-25000 characters has a few thousand lines even at 150 MB. The scanner
+    therefore reads lines, not characters, and classifies each break with native
+    string operations. A character-by-character loop in PowerShell would be a hundred
+    million interpreted iterations per file; this is a few thousand.
 
-    Repair rules, applied only where the break is destructive:
+    Classification of each line break, from the state at the end of the line:
 
-      - inside a tag, between two name characters   -> break removed
-      - inside a tag, next to whitespace or quotes  -> break replaced with a space
-      - inside an attribute value                   -> break removed
-      - inside a non-whitespace text node           -> break removed
-      - inside whitespace-only text (indentation)   -> left untouched
-      - inside ELAR:Content                         -> left untouched
+      - last '<' after last '>'          -> break inside markup      (destructive)
+      - tail after last '>' non-blank
+        and current element is Content   -> Base64 payload            (harmless)
+      - tail after last '>' non-blank    -> break inside a value      (destructive)
+      - tail blank                       -> indentation               (harmless)
 
-    After joining, a line may exceed MaxLineLength. The scanner re-breaks it at the
-    next element boundary, which is a safe position, so the output still respects the
-    limit without ever splitting a token.
+    Repair joins the destructive breaks and leaves the harmless ones, so indentation
+    and Base64 wrapping are preserved exactly as delivered.
 
 .PARAMETER Path
-    One or more files, directories, or wildcard patterns. Wildcards are supported in
-    both the directory and the file part, e.g. "G:\ELAR\OUT\*\*.INDX.*".
-    Directories are expanded using -Filter.
+    Files, directories, or wildcard patterns. Wildcards are supported in both the
+    directory and the file part, e.g. "G:\ELAR\OUT\*\*.INDX.*". Directories are
+    expanded with -Filter.
 
 .PARAMETER Filter
     Wildcard applied when Path names a directory. Default *INDX*.
@@ -49,38 +49,31 @@
 .PARAMETER NoBackup
     Skip the .bak copy when repairing. Not recommended.
 
-.PARAMETER MaxLineLength
-    Maximum output line length used when re-breaking repaired lines. Default 25000.
-
 .PARAMETER Encoding
     Charset used to read and rewrite. Defaults to windows-1252, which is what the
     legacy writer actually emitted; the XML declaration claims ISO-8859-1 and the two
-    differ only over 0x80-0x9F. The declaration is left untouched by this script.
+    differ only over 0x80-0x9F. The declaration is left untouched.
 
 .PARAMETER ContentElement
     Local name of the element holding the Base64 payload. Default Content.
 
 .PARAMETER ShowValues
-    Include offending values in the report, with breaks rendered as <LF>. Values may
-    contain personal data.
+    Include offending values in the report. Values may contain personal data.
 
 .PARAMETER CsvOut
     Optional CSV report path.
 
 .EXAMPLE
-    .\Repair-ElarIndxLineBreaks.ps1 -Path "G:\ELAR\OUT\CMOD\S210967_CLICT"
+    .\Repair-ElarIndxLineBreaks.ps1 -Path "G:\ELAR\OUT\*\*.INDX.*"
 
 .EXAMPLE
-    .\Repair-ElarIndxLineBreaks.ps1 -Path "G:\ELAR\OUT\*\*.INDX.*" -CsvOut .\findings.csv
-
-.EXAMPLE
-    .\Repair-ElarIndxLineBreaks.ps1 -Path "G:\ELAR\OUT\CMOD\*" -Recurse -Fix
+    .\Repair-ElarIndxLineBreaks.ps1 -Path "G:\ELAR\OUT\CMOD\S210967_CLICT" -Fix -WhatIf
 
 .NOTES
     Windows PowerShell 5.1 and PowerShell 7 compatible.
-    Without -Fix the script never writes to the scanned files.
-    With -Fix it writes a temporary file alongside the original and swaps it in only
-    after a clean close, so an interrupted run never leaves a truncated INDX.
+    Without -Fix nothing is written. With -Fix the repaired file is built alongside
+    the original and swapped in only after a clean close, so an interrupted run
+    leaves the original intact.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -96,8 +89,6 @@ param(
 
     [switch] $NoBackup,
 
-    [int] $MaxLineLength = 25000,
-
     [string] $Encoding = 'windows-1252',
 
     [string] $ContentElement = 'Content',
@@ -110,10 +101,6 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-# ---------------------------------------------------------------------------
-# File resolution: wildcards in any position, directories expanded with -Filter
-# ---------------------------------------------------------------------------
-
 function Resolve-IndxFiles {
     param([string[]] $Spec, [string] $Filter, [bool] $Recurse)
 
@@ -121,231 +108,181 @@ function Resolve-IndxFiles {
     $files = New-Object 'System.Collections.Generic.List[System.IO.FileInfo]'
 
     foreach ($s in $Spec) {
-
-        $candidates = @()
+        $cand = @()
 
         if (Test-Path -LiteralPath $s -PathType Container) {
-            $gci = @{ LiteralPath = $s; File = $true; Filter = $Filter }
-            if ($Recurse) { $gci['Recurse'] = $true }
-            $candidates = Get-ChildItem @gci -ErrorAction SilentlyContinue
+            $g = @{ LiteralPath = $s; File = $true; Filter = $Filter }
+            if ($Recurse) { $g['Recurse'] = $true }
+            $cand = Get-ChildItem @g -ErrorAction SilentlyContinue
         }
         elseif (Test-Path -LiteralPath $s -PathType Leaf) {
-            $candidates = Get-Item -LiteralPath $s
+            $cand = Get-Item -LiteralPath $s
         }
         else {
-            # Wildcard anywhere in the path.
-            $gci = @{ Path = $s; File = $true }
-            if ($Recurse) { $gci['Recurse'] = $true }
-            $candidates = Get-ChildItem @gci -ErrorAction SilentlyContinue
+            $g = @{ Path = $s; File = $true }
+            if ($Recurse) { $g['Recurse'] = $true }
+            $cand = @(Get-ChildItem @g -ErrorAction SilentlyContinue)
 
-            # A pattern that resolves to directories: expand each with -Filter.
-            $dirs = Get-Item -Path $s -ErrorAction SilentlyContinue |
-                    Where-Object { $_.PSIsContainer }
-            foreach ($d in $dirs) {
+            foreach ($d in @(Get-Item -Path $s -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })) {
                 $g2 = @{ LiteralPath = $d.FullName; File = $true; Filter = $Filter }
                 if ($Recurse) { $g2['Recurse'] = $true }
-                $candidates += Get-ChildItem @g2 -ErrorAction SilentlyContinue
+                $cand += Get-ChildItem @g2 -ErrorAction SilentlyContinue
             }
         }
 
-        foreach ($c in $candidates) {
-            if ($c -and -not $c.PSIsContainer -and $seen.Add($c.FullName)) {
-                $files.Add($c)
-            }
+        foreach ($c in $cand) {
+            if ($c -and -not $c.PSIsContainer -and $seen.Add($c.FullName)) { $files.Add($c) }
         }
     }
-
     return $files
 }
 
-# ---------------------------------------------------------------------------
-# Tag repair: fix breaks inside markup without disturbing attribute separation
-# ---------------------------------------------------------------------------
-
-function Repair-Tag {
-    param([string] $Tag, [ref] $Repairs)
-
-    if ($Tag.IndexOf("`n") -lt 0 -and $Tag.IndexOf("`r") -lt 0) { return $Tag }
-
-    $sb       = New-Object System.Text.StringBuilder ($Tag.Length)
-    $inQuote  = $false
-    $quoteCh  = [char]0
-    $nameChar = { param($c) [char]::IsLetterOrDigit($c) -or $c -eq '_' -or $c -eq '-' -or $c -eq '.' -or $c -eq ':' }
-
-    for ($i = 0; $i -lt $Tag.Length; $i++) {
-        $ch = $Tag[$i]
-
-        if ($inQuote) {
-            if ($ch -eq $quoteCh) { $inQuote = $false; [void]$sb.Append($ch); continue }
-        }
-        elseif ($ch -eq '"' -or $ch -eq "'") {
-            $inQuote = $true; $quoteCh = $ch; [void]$sb.Append($ch); continue
-        }
-
-        if ($ch -eq "`r" -or $ch -eq "`n") {
-
-            # Consume a CRLF pair as one break.
-            if ($ch -eq "`r" -and ($i + 1) -lt $Tag.Length -and $Tag[$i + 1] -eq "`n") { $i++ }
-
-            $Repairs.Value++
-
-            if ($inQuote) {
-                # A break inside an attribute value is injected corruption.
-                continue
-            }
-
-            $prev = if ($sb.Length -gt 0) { $sb[$sb.Length - 1] } else { [char]0 }
-            $next = if (($i + 1) -lt $Tag.Length) { $Tag[$i + 1] } else { [char]0 }
-
-            if ((& $nameChar $prev) -and (& $nameChar $next)) {
-                # Split name: rejoin.
-                continue
-            }
-            # Otherwise the break was legal whitespace between attributes.
-            if ($prev -ne ' ') { [void]$sb.Append(' ') }
-            continue
-        }
-
-        [void]$sb.Append($ch)
-    }
-
-    return $sb.ToString()
+# Name characters, for deciding whether a break inside markup split a token.
+function Test-NameChar {
+    param([char] $c)
+    return ([char]::IsLetterOrDigit($c) -or $c -eq '_' -or $c -eq '-' -or $c -eq '.' -or $c -eq ':')
 }
 
-# ---------------------------------------------------------------------------
-# Main scanner: one pass, states OUTSIDE / INTAG, streaming through Content
-# ---------------------------------------------------------------------------
+<#
+    Determines the parser state at the END of a line, using only native string
+    operations. Returns the element name currently open and whether the line ends
+    inside a tag or inside non-blank character data.
+#>
+function Get-LineEndState {
+    param(
+        [string] $Line,
+        [string] $PrevElement,
+        [bool]   $PrevInTag
+    )
+
+    $lastGt = $Line.LastIndexOf('>')
+    $lastLt = $Line.LastIndexOf('<')
+
+    $endsInTag = if ($lastLt -gt $lastGt) { $true }
+                 elseif ($lastLt -lt 0 -and $lastGt -lt 0) { $PrevInTag }
+                 else { $false }
+
+    # The element in scope is the last start tag on this line, if any.
+    $element = $PrevElement
+    $i = $Line.Length
+    while ($true) {
+        $i = $Line.LastIndexOf('<', [Math]::Max($i - 1, 0))
+        if ($i -lt 0) { break }
+        if ($i + 1 -lt $Line.Length) {
+            $c = $Line[$i + 1]
+            if ($c -eq '/') {
+                # Closing tag: nothing is open in character-data terms.
+                $element = ''
+                break
+            }
+            if ($c -ne '?' -and $c -ne '!') {
+                $j = $i + 1
+                while ($j -lt $Line.Length -and (Test-NameChar $Line[$j])) { $j++ }
+                $element = $Line.Substring($i + 1, $j - $i - 1)
+                # A self-closing tag leaves nothing open.
+                if ($lastGt -gt $i -and $lastGt -gt 0 -and $Line[$lastGt - 1] -eq '/') { $element = '' }
+                break
+            }
+        }
+        if ($i -eq 0) { break }
+    }
+
+    # Text following the last '>' on the line.
+    $tail = if ($endsInTag) { '' }
+            elseif ($lastGt -ge 0) { $Line.Substring($lastGt + 1) }
+            else { $Line }
+
+    return [pscustomobject]@{
+        EndsInTag   = $endsInTag
+        Element     = $element
+        TailIsBlank = [string]::IsNullOrWhiteSpace($tail)
+        Tail        = $tail
+    }
+}
 
 function Invoke-IndxScan {
     param(
-        [System.IO.FileInfo]      $File,
-        [System.Text.Encoding]    $Enc,
-        [string]                  $ContentLocalName,
-        [bool]                    $DoFix,
-        [string]                  $OutPath,
-        [int]                     $LineLimit
+        [System.IO.FileInfo]   $File,
+        [System.Text.Encoding] $Enc,
+        [string]               $ContentLocalName,
+        [bool]                 $DoFix,
+        [string]               $OutPath
     )
 
     $findings = New-Object 'System.Collections.Generic.List[psobject]'
     $reader = $null; $writer = $null
-
-    $tagRepairs   = 0
-    $textRepairs  = 0
-    $rebreaks     = 0
-    $docCount     = 0
-    $lineNo       = 1
-    $lineLen      = 0
-    $curElement   = ''
-    $inContent    = $false
-
-    $tagBuf  = New-Object System.Text.StringBuilder 256
-    $textBuf = New-Object System.Text.StringBuilder 512
-    $inTag   = $false
-
-    # Emit helper: tracks line length, re-breaks only before a start tag.
-    $emit = {
-        param([string] $s, [bool] $mayBreakBefore)
-
-        if ($DoFix -and $mayBreakBefore -and $lineLen -gt $LineLimit) {
-            $writer.Write("`n"); $script:lineLen = 0; $script:rebreaks++
-        }
-        if ($DoFix) { $writer.Write($s) }
-
-        $nl = $s.LastIndexOfAny([char[]]@("`n", "`r"))
-        if ($nl -ge 0) { $script:lineLen = $s.Length - $nl - 1 }
-        else           { $script:lineLen += $s.Length }
-    }
+    $markupBreaks = 0; $valueBreaks = 0; $docCount = 0; $lineNo = 0
 
     try {
-        $reader = New-Object System.IO.StreamReader($File.FullName, $Enc, $false, 65536)
-        if ($DoFix) {
-            $writer = New-Object System.IO.StreamWriter($OutPath, $false, $Enc, 65536)
-        }
+        $reader = New-Object System.IO.StreamReader($File.FullName, $Enc, $false, 1048576)
+        if ($DoFix) { $writer = New-Object System.IO.StreamWriter($OutPath, $false, $Enc, 1048576) }
 
-        $script:lineLen = 0
-        $script:rebreaks = 0
+        $prevLine    = $null
+        $prevState   = $null
+        $prevElement = ''
+        $prevInTag   = $false
 
-        $buf = New-Object char[] 65536
-        while (($n = $reader.Read($buf, 0, $buf.Length)) -gt 0) {
-            for ($k = 0; $k -lt $n; $k++) {
-                $ch = $buf[$k]
+        while ($null -ne ($line = $reader.ReadLine())) {
+            $lineNo++
 
-                if ($ch -eq "`n") { $lineNo++ }
+            # Cheap document counter: start tags on this line.
+            if ($line.IndexOf('<ELAR:Doc') -ge 0 -or $line.IndexOf(':Document>') -ge 0) {
+                $docCount++
+            }
 
-                if ($inTag) {
-                    [void]$tagBuf.Append($ch)
-                    if ($ch -eq '>') {
-                        $tag = $tagBuf.ToString()
-                        $tagBuf.Length = 0
-                        $inTag = $false
+            if ($null -ne $prevLine) {
+                # Classify the break BETWEEN prevLine and line.
+                $local = if ($prevState.Element) {
+                             $prevState.Element.Substring($prevState.Element.IndexOf(':') + 1)
+                         } else { '' }
 
-                        $before = 0
-                        $fixed  = Repair-Tag -Tag $tag -Repairs ([ref]$before)
-                        if ($before -gt 0) {
-                            $tagRepairs += $before
-                            $findings.Add([pscustomobject]@{
-                                File = $File.Name; Kind = 'MarkupLineBreak'
-                                Element = $curElement; Line = $lineNo; Value = $tag
-                            })
-                        }
+                $kind = if ($prevState.EndsInTag)      { 'MarkupLineBreak' }
+                        elseif ($prevState.TailIsBlank) { 'Safe' }
+                        elseif ($local -eq $ContentLocalName) { 'Safe' }
+                        else { 'TextLineBreak' }
 
-                        # Element name from a start tag.
-                        if ($fixed.Length -gt 1 -and $fixed[1] -ne '/' -and $fixed[1] -ne '?' -and $fixed[1] -ne '!') {
-                            $m = [regex]::Match($fixed, '^<\s*([^\s/>]+)')
-                            if ($m.Success) {
-                                $curElement = $m.Groups[1].Value
-                                $local = $curElement.Substring($curElement.IndexOf(':') + 1)
-                                $inContent = ($local -eq $ContentLocalName)
-                                if ($local -eq 'Doc' -or $local -eq 'Document') { $docCount++ }
-                                if ($fixed.EndsWith('/>')) { $inContent = $false }
-                            }
-                        }
-                        elseif ($fixed.Length -gt 1 -and $fixed[1] -eq '/') {
-                            $inContent = $false
-                        }
-
-                        & $emit $fixed $true
-                    }
-                    continue
-                }
-
-                if ($ch -eq '<') {
-                    # Flush the text node accumulated since the last '>'.
-                    if ($textBuf.Length -gt 0) {
-                        $text = $textBuf.ToString()
-                        $textBuf.Length = 0
-
-                        $hasBreak = ($text.IndexOf("`n") -ge 0 -or $text.IndexOf("`r") -ge 0)
-                        $isBlank  = [string]::IsNullOrWhiteSpace($text)
-
-                        if ($hasBreak -and -not $isBlank) {
-                            # A break inside a real value: injected corruption.
-                            $textRepairs++
-                            $findings.Add([pscustomobject]@{
-                                File = $File.Name; Kind = 'TextLineBreak'
-                                Element = $curElement; Line = $lineNo; Value = $text
-                            })
-                            $text = $text -replace "`r`n", '' -replace "[`r`n]", ''
-                        }
-                        & $emit $text $false
-                    }
-
-                    $inTag = $true
-                    [void]$tagBuf.Append($ch)
-                    continue
-                }
-
-                if ($inContent) {
-                    # Base64 payload: stream straight through, never buffered.
-                    & $emit ([string]$ch) $false
+                if ($kind -eq 'Safe') {
+                    if ($DoFix) { $writer.Write($prevLine); $writer.Write("`n") }
                 }
                 else {
-                    [void]$textBuf.Append($ch)
+                    if ($kind -eq 'MarkupLineBreak') { $markupBreaks++ } else { $valueBreaks++ }
+
+                    $val = if ($kind -eq 'TextLineBreak') {
+                               $prevState.Tail + '<LF>' + $line.Substring(0, [Math]::Min(40, $line.Length))
+                           } else {
+                               $prevLine.Substring([Math]::Max(0, $prevLine.Length - 40)) + '<LF>' +
+                               $line.Substring(0, [Math]::Min(40, $line.Length))
+                           }
+
+                    $findings.Add([pscustomobject]@{
+                        File    = $File.Name
+                        Kind    = $kind
+                        Element = $prevState.Element
+                        Line    = ($lineNo - 1)
+                        Value   = $val
+                    })
+
+                    if ($DoFix) {
+                        $writer.Write($prevLine)
+                        # Inside markup the break may have been legal whitespace
+                        # between attributes; only rejoin when it split a token.
+                        if ($kind -eq 'MarkupLineBreak') {
+                            $a = if ($prevLine.Length -gt 0) { $prevLine[$prevLine.Length - 1] } else { [char]0 }
+                            $b = if ($line.Length -gt 0) { $line[0] } else { [char]0 }
+                            if (-not ((Test-NameChar $a) -and (Test-NameChar $b))) { $writer.Write(' ') }
+                        }
+                        # For a value break, join with nothing.
+                    }
                 }
             }
+
+            $prevLine  = $line
+            $prevState = Get-LineEndState -Line $line -PrevElement $prevElement -PrevInTag $prevInTag
+            $prevElement = $prevState.Element
+            $prevInTag   = $prevState.EndsInTag
         }
 
-        if ($textBuf.Length -gt 0) { & $emit $textBuf.ToString() $false }
+        if ($DoFix -and $null -ne $prevLine) { $writer.Write($prevLine); $writer.Write("`n") }
     }
     finally {
         if ($writer) { $writer.Flush(); $writer.Dispose() }
@@ -353,12 +290,12 @@ function Invoke-IndxScan {
     }
 
     return [pscustomobject]@{
-        File        = $File
-        Findings    = $findings
-        TagRepairs  = $tagRepairs
-        TextRepairs = $textRepairs
-        Rebreaks    = $script:rebreaks
-        DocCount    = $docCount
+        File         = $File
+        Findings     = $findings
+        MarkupBreaks = $markupBreaks
+        ValueBreaks  = $valueBreaks
+        DocCount     = $docCount
+        Lines        = $lineNo
     }
 }
 
@@ -368,18 +305,16 @@ try   { $enc = [System.Text.Encoding]::GetEncoding($Encoding) }
 catch { throw "Unknown charset '$Encoding'. Try windows-1252, ISO-8859-1, or utf-8." }
 
 $files = Resolve-IndxFiles -Spec $Path -Filter $Filter -Recurse:$Recurse.IsPresent
-if ($files.Count -eq 0) {
-    Write-Warning "No files matched: $($Path -join ', ')"
-    return
-}
+if ($files.Count -eq 0) { Write-Warning "No files matched: $($Path -join ', ')"; return }
 
 $mode = if ($Fix) { 'REPAIR (writes in place)' } else { 'report only' }
 Write-Host ""
-Write-Host "Files: $($files.Count)   Mode: $mode   Charset: $Encoding   Skipping <*:$ContentElement>" -ForegroundColor Cyan
+Write-Host "Files: $($files.Count)   Mode: $mode   Charset: $Encoding   Payload element: $ContentElement" -ForegroundColor Cyan
 Write-Host ""
 
 $all = New-Object 'System.Collections.Generic.List[psobject]'
 $totalDocs = 0; $filesChanged = 0; $i = 0
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
 
 foreach ($f in $files) {
     $i++
@@ -388,54 +323,52 @@ foreach ($f in $files) {
     $tmp = if ($Fix) { Join-Path $f.DirectoryName ($f.Name + '.repair.tmp') } else { $null }
 
     $r = Invoke-IndxScan -File $f -Enc $enc -ContentLocalName $ContentElement `
-                         -DoFix:$Fix.IsPresent -OutPath $tmp -LineLimit $MaxLineLength
+                         -DoFix:$Fix.IsPresent -OutPath $tmp
 
     $totalDocs += $r.DocCount
     foreach ($x in $r.Findings) { $all.Add($x) }
-    $bad = $r.TagRepairs + $r.TextRepairs
+    $bad = $r.MarkupBreaks + $r.ValueBreaks
 
     if ($bad -eq 0) {
-        Write-Host ("  OK    {0,-50} {1,6} docs" -f $f.Name, $r.DocCount) -ForegroundColor DarkGray
-        if ($Fix -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Force }
+        Write-Host ("  OK        {0,-48} {1,6} docs, {2,6} lines" -f $f.Name, $r.DocCount, $r.Lines) -ForegroundColor DarkGray
+        if ($Fix -and $tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Force }
         continue
     }
 
-    $label = if ($r.TagRepairs -gt 0) { 'MALFORMED' } else { 'BAD' }
-    $color = if ($r.TagRepairs -gt 0) { 'Red' } else { 'Yellow' }
-    Write-Host ("  {0,-9} {1,-50} {2,6} docs, {3} value(s), {4} markup" -f `
-                $label, $f.Name, $r.DocCount, $r.TextRepairs, $r.TagRepairs) -ForegroundColor $color
+    $label = if ($r.MarkupBreaks -gt 0) { 'MALFORMED' } else { 'BAD' }
+    $color = if ($r.MarkupBreaks -gt 0) { 'Red' } else { 'Yellow' }
+    Write-Host ("  {0,-9} {1,-48} {2} value(s), {3} markup" -f $label, $f.Name, $r.ValueBreaks, $r.MarkupBreaks) -ForegroundColor $color
 
     if (-not $Fix) { continue }
 
     if ($PSCmdlet.ShouldProcess($f.FullName, "Repair $bad line break(s) in place")) {
-        if (-not $NoBackup) {
-            Copy-Item -LiteralPath $f.FullName -Destination ($f.FullName + '.bak') -Force
-        }
-        # Swap in only after a clean close: an interrupted run leaves the original.
+        if (-not $NoBackup) { Copy-Item -LiteralPath $f.FullName -Destination ($f.FullName + '.bak') -Force }
         Move-Item -LiteralPath $tmp -Destination $f.FullName -Force
         $filesChanged++
-        Write-Host ("          repaired, {0} line(s) re-broken at element boundaries" -f $r.Rebreaks) -ForegroundColor Green
+        Write-Host "            repaired" -ForegroundColor Green
     }
-    else {
-        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+    elseif ($tmp -and (Test-Path -LiteralPath $tmp)) {
+        Remove-Item -LiteralPath $tmp -Force
     }
 }
 Write-Progress -Activity 'Scanning INDX files' -Completed
+$sw.Stop()
 
 $textN = @($all | Where-Object { $_.Kind -eq 'TextLineBreak' }).Count
 $tagN  = @($all | Where-Object { $_.Kind -eq 'MarkupLineBreak' }).Count
 
 Write-Host ""
 Write-Host "--- Summary ---------------------------------------------------" -ForegroundColor Cyan
-Write-Host ("Files scanned          : {0}" -f $files.Count)
-Write-Host ("Documents seen         : {0}" -f $totalDocs)
-Write-Host ("Corrupted values       : {0}" -f $textN)
-Write-Host ("Breaks inside markup   : {0}" -f $tagN)
-if ($Fix) { Write-Host ("Files repaired         : {0}" -f $filesChanged) }
+Write-Host ("Files scanned        : {0}" -f $files.Count)
+Write-Host ("Documents seen       : {0}" -f $totalDocs)
+Write-Host ("Corrupted values     : {0}" -f $textN)
+Write-Host ("Breaks inside markup : {0}" -f $tagN)
+if ($Fix) { Write-Host ("Files repaired       : {0}" -f $filesChanged) }
+Write-Host ("Elapsed              : {0:n1}s" -f $sw.Elapsed.TotalSeconds)
 Write-Host ""
 
 if ($all.Count -eq 0) {
-    Write-Host "No line breaks found outside the Base64 payload." -ForegroundColor Green
+    Write-Host "No line breaks found outside the Base64 payload and indentation." -ForegroundColor Green
     Write-Host ""
     return
 }
@@ -447,11 +380,7 @@ Write-Host ""
 
 if ($ShowValues) {
     Write-Host "Values (may contain personal data - do not persist):" -ForegroundColor Magenta
-    foreach ($x in $all) {
-        $v = $x.Value -replace "`r", '<CR>' -replace "`n", '<LF>'
-        if ($v.Length -gt 120) { $v = $v.Substring(0, 120) + '...' }
-        Write-Host ("  {0}:{1}  {2} = {3}" -f $x.File, $x.Line, $x.Element, $v)
-    }
+    foreach ($x in $all) { Write-Host ("  {0}:{1}  {2} = {3}" -f $x.File, $x.Line, $x.Element, $x.Value) }
     Write-Host ""
 }
 else {
@@ -474,10 +403,9 @@ if ($tagN -gt 0) {
 
 if (-not $Fix) {
     Write-Host "Re-run with -Fix to repair in place (.bak kept unless -NoBackup)." -ForegroundColor Cyan
-    Write-Host ""
 }
 else {
-    Write-Host "Repaired files differ from what was delivered to the archive." -ForegroundColor Yellow
+    Write-Host "Repaired files now differ from what was delivered to the archive." -ForegroundColor Yellow
     Write-Host "Re-delivery is a separate decision for the archiving team." -ForegroundColor Yellow
-    Write-Host ""
 }
+Write-Host ""
