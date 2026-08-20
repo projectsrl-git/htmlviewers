@@ -1,0 +1,4 @@
+$x = [xml](Get-Content $indx -Raw)
+$ns = @{ELAR=$x.DocumentElement.GetAttribute("xmlns:ELAR")}
+Select-Xml -Xml $x -XPath "//*[not(local-name()='Content')][contains(text(), \"`n\")]" |
+  ForEach-Object { "{0} = {1}" -f $_.Node.LocalName, ($_.Node.InnerText -replace "`n","<LF>") }
