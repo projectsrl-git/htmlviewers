@@ -64,6 +64,18 @@
 .PARAMETER CsvOut
     Optional CSV report path.
 
+.PARAMETER Validate
+    After scanning - and after repairing, when -Fix is given - parse the file with a
+    streaming XML reader and report whether it is well-formed. This is the check ELAR
+    itself performs before importing, so it answers in advance whether the file would
+    be accepted.
+
+    Note what it does and does not catch. A line break inside a value leaves the
+    document perfectly well-formed, so this check passes on a file whose metadata is
+    corrupted; only the line-break scan finds that. Conversely a break inside a tag
+    name makes the document unparseable, and this check pinpoints it with a line and
+    column. The two checks are complementary, not alternatives.
+
 .PARAMETER FailOnFindings
     Exit with code 2 when findings exist, so a workflow can branch on the result.
 
@@ -103,7 +115,9 @@ param(
 
     [string] $CsvOut,
 
-    [switch] $FailOnFindings
+    [switch] $FailOnFindings,
+
+    [switch] $Validate
 )
 
 Set-StrictMode -Version 2.0
@@ -158,6 +172,68 @@ function Resolve-IndxFiles {
 function Test-NameChar {
     param([char] $c)
     return ([char]::IsLetterOrDigit($c) -or $c -eq '_' -or $c -eq '-' -or $c -eq '.' -or $c -eq ':')
+}
+
+function Test-WellFormed {
+    param(
+        [System.IO.FileInfo]   $File,
+        [System.Text.Encoding] $Enc,
+        [int]                  $TickSeconds
+    )
+
+    $fs = $null; $sr = $null; $reader = $null
+    $nodes = 0
+
+    try {
+        $fs = New-Object System.IO.FileStream($File.FullName,
+                  [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+                  [System.IO.FileShare]::ReadWrite, 1048576)
+
+        # Reading through a TextReader with an explicit charset bypasses the XML
+        # declaration, which the legacy writer never kept in step with the bytes.
+        # Otherwise a file could fail here for an encoding mismatch rather than for
+        # the structural problem we are looking for.
+        $sr = New-Object System.IO.StreamReader($fs, $Enc, $false, 1048576)
+
+        $set = New-Object System.Xml.XmlReaderSettings
+        $set.DtdProcessing   = [System.Xml.DtdProcessing]::Prohibit
+        $set.CheckCharacters = $true
+        $reader = [System.Xml.XmlReader]::Create($sr, $set)
+
+        $total    = [double]$File.Length
+        $sw       = [System.Diagnostics.Stopwatch]::StartNew()
+        $nextTick = if ($TickSeconds -gt 0) { [double]$TickSeconds } else { [double]::MaxValue }
+
+        while ($reader.Read()) {
+            $nodes++
+            if (($nodes % 50000) -eq 0) {
+                $el = $sw.Elapsed.TotalSeconds
+                if ($el -ge $nextTick) {
+                    $nextTick = $el + $TickSeconds
+                    $pos = [double]$fs.Position
+                    $pct = if ($total -gt 0) { [Math]::Min(100, ($pos / $total) * 100) } else { 0 }
+                    Log ("    ... validating {0:n0}/{1:n0} MB ({2:n0}%)  {3:n0} nodes" -f `
+                         ($pos / 1MB), ($total / 1MB), $pct, $nodes)
+                }
+            }
+        }
+
+        return [pscustomobject]@{ Ok = $true; Message = ''; Line = 0; Position = 0; Nodes = $nodes }
+    }
+    catch [System.Xml.XmlException] {
+        return [pscustomobject]@{
+            Ok = $false; Message = $_.Exception.Message
+            Line = $_.Exception.LineNumber; Position = $_.Exception.LinePosition; Nodes = $nodes
+        }
+    }
+    catch {
+        return [pscustomobject]@{ Ok = $false; Message = $_.Exception.Message; Line = 0; Position = 0; Nodes = $nodes }
+    }
+    finally {
+        if ($reader) { $reader.Dispose() }
+        elseif ($sr) { $sr.Dispose() }
+        elseif ($fs) { $fs.Dispose() }
+    }
 }
 
 function Invoke-IndxScan {
@@ -360,6 +436,7 @@ try {
 
     $all = New-Object 'System.Collections.Generic.List[psobject]'
     $totalDocs = 0; $filesChanged = 0; $i = 0
+    $notWellFormed = 0
     $swAll = [System.Diagnostics.Stopwatch]::StartNew()
 
     foreach ($f in $files) {
@@ -384,6 +461,19 @@ try {
         if ($bad -eq 0) {
             Log "    result=OK"
             if ($Fix -and $tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Force }
+
+            if ($Validate) {
+                $swV = [System.Diagnostics.Stopwatch]::StartNew()
+                $v = Test-WellFormed -File $f -Enc $enc -TickSeconds $ProgressSeconds
+                $swV.Stop()
+                if ($v.Ok) {
+                    Log ("    wellFormed=yes nodes={0:n0} elapsed={1:n1}s" -f $v.Nodes, $swV.Elapsed.TotalSeconds)
+                }
+                else {
+                    $notWellFormed++
+                    Log ("    wellFormed=no line={0} position={1} reason={2}" -f $v.Line, $v.Position, $v.Message)
+                }
+            }
             continue
         }
 
@@ -391,7 +481,21 @@ try {
         Log ("    result={0} values={1} markup={2} badAngle={3}" -f `
              $label, $r.ValueBreaks, $r.MarkupBreaks, $r.BadAngles)
 
-        if (-not $Fix) { continue }
+        if (-not $Fix) {
+            if ($Validate) {
+                $swV = [System.Diagnostics.Stopwatch]::StartNew()
+                $v = Test-WellFormed -File $f -Enc $enc -TickSeconds $ProgressSeconds
+                $swV.Stop()
+                if ($v.Ok) {
+                    Log ("    wellFormed=yes nodes={0:n0} elapsed={1:n1}s" -f $v.Nodes, $swV.Elapsed.TotalSeconds)
+                }
+                else {
+                    $notWellFormed++
+                    Log ("    wellFormed=no line={0} position={1} reason={2}" -f $v.Line, $v.Position, $v.Message)
+                }
+            }
+            continue
+        }
 
         if ($PSCmdlet.ShouldProcess($f.FullName, "Repair $bad line break(s) in place")) {
             if (-not $NoBackup) {
@@ -401,6 +505,23 @@ try {
             Move-Item -LiteralPath $tmp -Destination $f.FullName -Force
             $filesChanged++
             Log ("    repaired={0}" -f $f.Name)
+
+            if ($Validate) {
+                # Validate the repaired file, not the original: this is the state
+                # that will actually be delivered.
+                $fAfter = Get-Item -LiteralPath $f.FullName
+                $swV = [System.Diagnostics.Stopwatch]::StartNew()
+                $v = Test-WellFormed -File $fAfter -Enc $enc -TickSeconds $ProgressSeconds
+                $swV.Stop()
+                if ($v.Ok) {
+                    Log ("    wellFormed=yes nodes={0:n0} elapsed={1:n1}s" -f $v.Nodes, $swV.Elapsed.TotalSeconds)
+                }
+                else {
+                    $notWellFormed++
+                    Log ("    wellFormed=no line={0} position={1} reason={2}" -f $v.Line, $v.Position, $v.Message)
+                    Log  "    WARNING the repair did not make this file parseable; do not deliver it"
+                }
+            }
         }
         elseif ($tmp -and (Test-Path -LiteralPath $tmp)) {
             Remove-Item -LiteralPath $tmp -Force
@@ -419,6 +540,7 @@ try {
     Log ("  markupBreaks={0}" -f $tagN)
     Log ("  invalidSpaceAfterAngle={0}" -f $angleN)
     if ($Fix) { Log ("  filesRepaired={0}" -f $filesChanged) }
+    if ($Validate) { Log ("  notWellFormed={0}" -f $notWellFormed) }
     Log ("  elapsed={0:n1}s" -f $swAll.Elapsed.TotalSeconds)
 
     if ($all.Count -gt 0) {
@@ -449,6 +571,11 @@ try {
             Log "  NOTE corrupted values still parse as valid XML; the values themselves are wrong"
         }
         if ($FailOnFindings) { $exitCode = 2 }
+    }
+
+    if ($Validate -and $notWellFormed -gt 0) {
+        Log "  NOTE a file that is not well-formed will be rejected by ELAR in full: zero records imported"
+        $exitCode = 2
     }
 
     Log ("END exit={0}" -f $exitCode)
