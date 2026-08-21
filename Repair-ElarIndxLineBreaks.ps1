@@ -173,6 +173,8 @@ function Invoke-IndxScan {
     $findings = New-Object 'System.Collections.Generic.List[psobject]'
     $reader = $null; $writer = $null; $fs = $null
     $markupBreaks = 0; $valueBreaks = 0; $docCount = 0; $lineNo = 0; $fastPath = 0
+    $badAngles = 0
+    $reBadAngle = New-Object System.Text.RegularExpressions.Regex '<[ \t]+(?=[A-Za-z_])'
 
     try {
         $fs = New-Object System.IO.FileStream($File.FullName,
@@ -232,9 +234,35 @@ function Invoke-IndxScan {
                         if ($prevInTag) {
                             $a = if ($prevLine.Length -gt 0) { $prevLine[$prevLine.Length - 1] } else { [char]0 }
                             $b = if ($line.Length -gt 0) { $line[0] } else { [char]0 }
-                            if (-not ((Test-NameChar $a) -and (Test-NameChar $b))) { $writer.Write(' ') }
+                            # A space belongs here ONLY where the break separated two
+                            # attributes, i.e. right after a closing quote. Anywhere
+                            # else - and in particular straight after '<' - the break
+                            # split a token and the halves must be rejoined.
+                            # Inserting a space after '<' produces "< ELAR:TaxCode>",
+                            # which is not a valid element start.
+                            if (($a -eq '"' -or $a -eq "'") -and (Test-NameChar $b)) { $writer.Write(' ') }
                         }
                     }
+                }
+            }
+
+            # Independent of line breaks: '<' followed by whitespace is an invalid
+            # element start. Earlier versions of this script could introduce it while
+            # repairing a break that fell immediately after '<'.
+            if ($line.IndexOf('<') -ge 0) {
+                $mm = $reBadAngle.Matches($line)
+                if ($mm.Count -gt 0) {
+                    $badAngles += $mm.Count
+                    foreach ($mx in $mm) {
+                        $findings.Add([pscustomobject]@{
+                            File    = $File.Name
+                            Kind    = 'InvalidSpaceAfterAngle'
+                            Element = ''
+                            Line    = $lineNo
+                            Value   = $line.Substring($mx.Index, [Math]::Min(40, $line.Length - $mx.Index))
+                        })
+                    }
+                    if ($DoFix) { $line = $reBadAngle.Replace($line, '<') }
                 }
             }
 
@@ -302,6 +330,7 @@ function Invoke-IndxScan {
         Findings     = $findings
         MarkupBreaks = $markupBreaks
         ValueBreaks  = $valueBreaks
+        BadAngles    = $badAngles
         DocCount     = $docCount
         Lines        = $lineNo
         FastPath     = $fastPath
@@ -343,7 +372,7 @@ try {
 
         $totalDocs += $r.DocCount
         foreach ($x in $r.Findings) { $all.Add($x) }
-        $bad = $r.MarkupBreaks + $r.ValueBreaks
+        $bad = $r.MarkupBreaks + $r.ValueBreaks + $r.BadAngles
         $fastPct = if ($r.Lines -gt 0) { ($r.FastPath / $r.Lines) * 100 } else { 0 }
 
         Log ("    scanned lines={0:n0} docs={1:n0} elapsed={2:n1}s fastpath={3:n0}%" -f `
@@ -355,8 +384,9 @@ try {
             continue
         }
 
-        $label = if ($r.MarkupBreaks -gt 0) { 'MALFORMED' } else { 'CORRUPTED' }
-        Log ("    result={0} values={1} markup={2}" -f $label, $r.ValueBreaks, $r.MarkupBreaks)
+        $label = if ($r.MarkupBreaks -gt 0 -or $r.BadAngles -gt 0) { 'MALFORMED' } else { 'CORRUPTED' }
+        Log ("    result={0} values={1} markup={2} badAngle={3}" -f `
+             $label, $r.ValueBreaks, $r.MarkupBreaks, $r.BadAngles)
 
         if (-not $Fix) { continue }
 
@@ -375,14 +405,16 @@ try {
     }
     $swAll.Stop()
 
-    $textN = @($all | Where-Object { $_.Kind -eq 'TextLineBreak' }).Count
-    $tagN  = @($all | Where-Object { $_.Kind -eq 'MarkupLineBreak' }).Count
+    $textN   = @($all | Where-Object { $_.Kind -eq 'TextLineBreak' }).Count
+    $tagN    = @($all | Where-Object { $_.Kind -eq 'MarkupLineBreak' }).Count
+    $angleN  = @($all | Where-Object { $_.Kind -eq 'InvalidSpaceAfterAngle' }).Count
 
     Log "SUMMARY"
     Log ("  filesScanned={0}" -f $files.Count)
     Log ("  documents={0}" -f $totalDocs)
     Log ("  corruptedValues={0}" -f $textN)
     Log ("  markupBreaks={0}" -f $tagN)
+    Log ("  invalidSpaceAfterAngle={0}" -f $angleN)
     if ($Fix) { Log ("  filesRepaired={0}" -f $filesChanged) }
     Log ("  elapsed={0:n1}s" -f $swAll.Elapsed.TotalSeconds)
 
@@ -406,6 +438,9 @@ try {
 
         if ($tagN -gt 0) {
             Log "  NOTE markup breaks mean those files were not well-formed XML"
+        }
+        if ($angleN -gt 0) {
+            Log "  NOTE '< name' is an invalid element start; ELAR reports 'invalid start of an element'"
         }
         if ($textN -gt 0) {
             Log "  NOTE corrupted values still parse as valid XML; the values themselves are wrong"
