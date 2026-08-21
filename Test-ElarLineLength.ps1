@@ -40,6 +40,29 @@
 .PARAMETER Fix
     Re-wrap the payload in place.
 
+.PARAMETER Truncate
+    In addition to wrapping, shorten over-length lines that contain no payload by
+    truncating their character data until the line fits.
+
+    Only the text inside elements is cut; the markup around it is preserved, so the
+    document stays well-formed. Truncating the raw line instead would drop the
+    closing tag and break the file, which is the failure this whole exercise started
+    from.
+
+    This is data loss and it is deliberate: the shortened value is what gets
+    archived. Prefer fixing the source data where that is possible.
+
+.PARAMETER TruncatePayload
+    Allow truncation of payload lines as well. Off by default and rarely correct: a
+    cut Base64 stream decodes to an incomplete document. Wrapping achieves the same
+    line length with no loss, so use this only when a payload genuinely must be
+    discarded.
+
+.PARAMETER TruncateMarker
+    Text appended where a value was cut, e.g. "..." . Empty by default. It counts
+    against the line budget and, being archived content, makes the truncation
+    visible to whoever reads the record later.
+
 .PARAMETER NoBackup
     Skip the .bak copy when fixing.
 
@@ -81,6 +104,12 @@ param(
 
     [switch] $Fix,
 
+    [switch] $Truncate,
+
+    [switch] $TruncatePayload,
+
+    [string] $TruncateMarker = '',
+
     [switch] $NoBackup,
 
     [string] $ContentElement = 'Content',
@@ -115,6 +144,83 @@ $reOpen  = New-Object System.Text.RegularExpressions.Regex ('<(?:[A-Za-z0-9_.\-]
 $reClose = New-Object System.Text.RegularExpressions.Regex ('</(?:[A-Za-z0-9_.\-]+:)?' + $esc + '\s*>')
 $reSelf  = New-Object System.Text.RegularExpressions.Regex ('<(?:[A-Za-z0-9_.\-]+:)?' + $esc + '(?:\s[^>]*?)?/>')
 
+# Splits a run of XML into alternating markup and character-data pieces, so that
+# only the latter can be shortened.
+function Split-Markup {
+    param([string] $Text)
+
+    $out = New-Object 'System.Collections.Generic.List[psobject]'
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $lt = $Text.IndexOf('<', $i)
+        if ($lt -lt 0) {
+            $out.Add([pscustomobject]@{ Text = $Text.Substring($i); IsText = $true })
+            break
+        }
+        if ($lt -gt $i) {
+            $out.Add([pscustomobject]@{ Text = $Text.Substring($i, $lt - $i); IsText = $true })
+        }
+        $gt = $Text.IndexOf('>', $lt)
+        if ($gt -lt 0) {
+            # Unterminated tag: leave it alone, it is not ours to shorten.
+            $out.Add([pscustomobject]@{ Text = $Text.Substring($lt); IsText = $false })
+            break
+        }
+        $out.Add([pscustomobject]@{ Text = $Text.Substring($lt, $gt - $lt + 1); IsText = $false })
+        $i = $gt + 1
+    }
+    return $out
+}
+
+# Shortens character data until the whole line fits, longest value first, leaving
+# every tag intact. Returns the rebuilt line and how many characters were dropped.
+function Compress-Line {
+    param([string] $Line, [int] $Limit, [string] $Marker)
+
+    $pieces = Split-Markup -Text $Line
+    $markupLen = 0
+    foreach ($p in $pieces) { if (-not $p.IsText) { $markupLen += $p.Text.Length } }
+
+    $budget = $Limit - $markupLen
+    if ($budget -le 0) {
+        # The tags alone exceed the limit: nothing can be cut safely.
+        return [pscustomobject]@{ Line = $Line; Dropped = 0; Possible = $false }
+    }
+
+    $textLen = 0
+    foreach ($p in $pieces) { if ($p.IsText) { $textLen += $p.Text.Length } }
+    if ($textLen -le $budget) {
+        return [pscustomobject]@{ Line = $Line; Dropped = 0; Possible = $true }
+    }
+
+    $excess = $textLen - $budget
+    $dropped = 0
+
+    # Greedy: take from the longest value first, so short fields such as dates and
+    # codes survive untouched and only the genuinely oversized one is cut.
+    while ($excess -gt 0) {
+        $target = $null
+        foreach ($p in $pieces) {
+            if ($p.IsText -and ($null -eq $target -or $p.Text.Length -gt $target.Text.Length)) { $target = $p }
+        }
+        if ($null -eq $target -or $target.Text.Length -eq 0) { break }
+
+        $cut = [Math]::Min($excess, $target.Text.Length)
+        $keep = $target.Text.Length - $cut
+        $newText = $target.Text.Substring(0, $keep)
+        if ($Marker -and $keep -gt $Marker.Length) {
+            $newText = $newText.Substring(0, $keep - $Marker.Length) + $Marker
+        }
+        $target.Text = $newText
+        $dropped += $cut
+        $excess  -= $cut
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($p in $pieces) { [void]$sb.Append($p.Text) }
+    return [pscustomobject]@{ Line = $sb.ToString(); Dropped = $dropped; Possible = $true }
+}
+
 $exitCode = 0
 
 try {
@@ -144,6 +250,7 @@ try {
          $mode, $files.Count, $MaxLength, $chunk, $ContentElement, $Encoding)
 
     $i = 0; $filesChanged = 0; $totalOverOutside = 0
+    $totalTruncated = 0; $totalDropped = 0; $totalUnfixable = 0
 
     foreach ($f in $files) {
         $i++
@@ -154,6 +261,10 @@ try {
 
         $lineNo = 0; $maxSeen = 0; $maxSeenLine = 0
         $overPayload = 0; $overOutside = 0; $wrapped = 0
+        # Measured on what is written, so the fix proves itself rather than
+        # requiring a second pass to confirm the limit was respected.
+        $script:outMax = 0; $script:outOver = 0
+        $truncatedLines = 0; $droppedChars = 0; $unfixable = 0
         $overLines = New-Object 'System.Collections.Generic.List[string]'
         $inContent = $false
 
@@ -241,8 +352,41 @@ try {
 
                 if (-not $Fix) { continue }
 
+                $hasPayloadSeg = @($segs | Where-Object { $_.Payload }).Count -gt 0
+
+                # No payload on this line: wrapping does not apply, so truncation is
+                # the only lever - and only when asked for.
+                if (-not $hasPayloadSeg) {
+                    if ($Truncate -and $line.Length -gt $MaxLength) {
+                        $res = Compress-Line -Line $line -Limit $MaxLength -Marker $TruncateMarker
+                        if ($res.Possible -and $res.Dropped -gt 0) {
+                            $truncatedLines++
+                            $droppedChars += $res.Dropped
+                            $line = $res.Line
+                        }
+                        elseif (-not $res.Possible) {
+                            $unfixable++
+                        }
+                    }
+                    $writer.Write($line); $writer.Write("`n")
+                    continue
+                }
+
+                if ($TruncatePayload -and $line.Length -gt $MaxLength) {
+                    # Explicitly requested: cut the payload rather than wrap it. The
+                    # decoded document will be incomplete.
+                    $truncatedLines++
+                    $droppedChars += ($line.Length - $MaxLength)
+                    $writer.Write($line.Substring(0, $MaxLength)); $writer.Write("`n")
+                    continue
+                }
+
                 # Emit, wrapping payload segments and leaving everything else intact.
                 $col = 0
+                $closeOut = {
+                    if ($col -gt $script:outMax) { $script:outMax = $col }
+                    if ($col -gt $MaxLength) { $script:outOver++ }
+                }
                 foreach ($sg in $segs) {
                     if (-not $sg.Payload) {
                         $writer.Write($sg.Text)
@@ -253,16 +397,17 @@ try {
                     $off = 0
                     while ($off -lt $t.Length) {
                         $room = $chunk - $col
-                        if ($room -le 0) { $writer.Write("`n"); $wrapped++; $col = 0; $room = $chunk }
+                        if ($room -le 0) { & $closeOut; $writer.Write("`n"); $wrapped++; $col = 0; $room = $chunk }
                         # Keep the break on a quad boundary relative to this segment.
                         $take = [Math]::Min($room, $t.Length - $off)
                         if (($off + $take) -lt $t.Length) { $take = [int]([Math]::Floor($take / 4) * 4) }
-                        if ($take -le 0) { $writer.Write("`n"); $wrapped++; $col = 0; continue }
+                        if ($take -le 0) { & $closeOut; $writer.Write("`n"); $wrapped++; $col = 0; continue }
                         $writer.Write($t.Substring($off, $take))
                         $off += $take
                         $col += $take
                     }
                 }
+                & $closeOut
                 $writer.Write("`n")
             }
         }
@@ -276,12 +421,25 @@ try {
         Log ("    scanned lines={0:n0} elapsed={1:n1}s longestLine={2:n0} at line {3:n0}" -f `
              $lineNo, $swOne.Elapsed.TotalSeconds, $maxSeen, $maxSeenLine)
         Log ("    overLimit payload={0} outsidePayload={1}" -f $overPayload, $overOutside)
+        if ($Fix) {
+            Log ("    output longestLine={0:n0} overLimit={1}" -f $script:outMax, $script:outOver)
+            if ($script:outOver -gt 0) {
+                Log ("    WARNING {0} written line(s) still exceed {1}; these are markup or metadata, not payload" -f $script:outOver, $MaxLength)
+            }
+        }
+        if ($Fix -and ($truncatedLines -gt 0 -or $unfixable -gt 0)) {
+            Log ("    truncatedLines={0} charsDropped={1:n0} unfixable={2}" -f `
+                 $truncatedLines, $droppedChars, $unfixable)
+        }
 
         if ($overLines.Count -gt 0) {
             Log ("    outside-payload offenders: {0}" -f ($overLines -join '; '))
         }
 
         $totalOverOutside += $overOutside
+        $totalTruncated += $truncatedLines
+        $totalDropped   += $droppedChars
+        $totalUnfixable += $unfixable
 
         if (-not $Fix) {
             if ($maxSeen -gt $MaxLength) { $exitCode = 2 }
@@ -289,34 +447,46 @@ try {
             continue
         }
 
-        if ($wrapped -eq 0) {
-            Log "    nothing to re-wrap"
+        if ($wrapped -eq 0 -and $truncatedLines -eq 0) {
+            Log "    nothing to change"
             if ($tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Force }
         }
-        elseif ($PSCmdlet.ShouldProcess($f.FullName, "Re-wrap payload at $chunk characters")) {
+        elseif ($PSCmdlet.ShouldProcess($f.FullName, "Re-wrap payload at $chunk and truncate $truncatedLines line(s)")) {
             if (-not $NoBackup) {
                 Copy-Item -LiteralPath $f.FullName -Destination ($f.FullName + '.bak') -Force
                 Log ("    backup={0}.bak" -f $f.Name)
             }
             Move-Item -LiteralPath $tmp -Destination $f.FullName -Force
             $filesChanged++
-            Log ("    rewrapped breaksAdded={0}" -f $wrapped)
+            Log ("    rewrapped breaksAdded={0} truncated={1} charsDropped={2:n0}" -f `
+                 $wrapped, $truncatedLines, $droppedChars)
         }
         elseif ($tmp -and (Test-Path -LiteralPath $tmp)) {
             Remove-Item -LiteralPath $tmp -Force
         }
 
-        if ($overOutside -gt 0) { $exitCode = 2 }
+        if ($overOutside -gt 0 -or $script:outOver -gt 0) { $exitCode = 2 }
     }
 
     Log "SUMMARY"
     Log ("  filesScanned={0}" -f $files.Count)
     if ($Fix) { Log ("  filesChanged={0}" -f $filesChanged) }
     Log ("  overLimitOutsidePayload={0}" -f $totalOverOutside)
+    if ($Fix -and $Truncate) {
+        Log ("  truncatedLines={0}" -f $totalTruncated)
+        Log ("  charactersDropped={0:n0}" -f $totalDropped)
+        Log ("  unfixableLines={0}" -f $totalUnfixable)
+    }
 
-    if ($totalOverOutside -gt 0) {
+    if ($totalOverOutside -gt 0 -and -not $Truncate) {
         Log "  NOTE these lines are markup or metadata, not payload, and were left untouched"
-        Log "  NOTE breaking them would invalidate the document or corrupt a value"
+        Log "  NOTE add -Truncate to shorten their character data, keeping the tags intact"
+    }
+    if ($totalUnfixable -gt 0) {
+        Log "  NOTE some lines exceed the limit on markup alone; no truncation can fix those"
+    }
+    if ($totalDropped -gt 0) {
+        Log "  NOTE truncated values are archived in their shortened form"
     }
 
     Log ("END exit={0}" -f $exitCode)
