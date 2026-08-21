@@ -127,10 +127,10 @@ function Resolve-IndxFiles {
         if (Test-Path -LiteralPath $s -PathType Container) {
             $g = @{ LiteralPath = $s; File = $true; Filter = $Filter }
             if ($Recurse) { $g['Recurse'] = $true }
-            $cand = Get-ChildItem @g -ErrorAction SilentlyContinue
+            $cand = @(Get-ChildItem @g -ErrorAction SilentlyContinue)
         }
         elseif (Test-Path -LiteralPath $s -PathType Leaf) {
-            $cand = Get-Item -LiteralPath $s
+            $cand = @(Get-Item -LiteralPath $s)
         }
         else {
             $g = @{ Path = $s; File = $true }
@@ -345,7 +345,10 @@ try {
     try   { $enc = [System.Text.Encoding]::GetEncoding($Encoding) }
     catch { throw "Unknown charset '$Encoding'. Try windows-1252, ISO-8859-1, or utf-8." }
 
-    $files = Resolve-IndxFiles -Spec $Path -Filter $Filter -Recurse:$Recurse.IsPresent
+    # @() is required: returning a List from a function unrolls it, so a single
+    # match would come back as a bare object and an empty one as $null - both of
+    # which lack .Count under Set-StrictMode.
+    $files = @(Resolve-IndxFiles -Spec $Path -Filter $Filter -Recurse:$Recurse.IsPresent)
     if ($files.Count -eq 0) {
         Log ("WARN  no files matched: {0}" -f ($Path -join ', '))
         Log  "END exit=0"
@@ -371,7 +374,7 @@ try {
         $swOne.Stop()
 
         $totalDocs += $r.DocCount
-        foreach ($x in $r.Findings) { $all.Add($x) }
+        foreach ($x in @($r.Findings)) { $all.Add($x) }
         $bad = $r.MarkupBreaks + $r.ValueBreaks + $r.BadAngles
         $fastPct = if ($r.Lines -gt 0) { ($r.FastPath / $r.Lines) * 100 } else { 0 }
 
