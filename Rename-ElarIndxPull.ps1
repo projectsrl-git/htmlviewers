@@ -93,22 +93,26 @@ $reName = New-Object System.Text.RegularExpressions.Regex `
     ([System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 
 function Get-ShiftedName {
-    param([System.Text.RegularExpressions.Match] $M, [int] $Seconds)
+    param([System.Text.RegularExpressions.Match] $Match, [int] $Seconds)
 
-    $h = [int]$M.Groups['hh'].Value
-    $m = [int]$M.Groups['mm'].Value
-    $s = [int]$M.Groups['ss'].Value
+    # PowerShell variable names are case-insensitive, so locals here must not be
+    # named $m / $s: they would overwrite the $Match parameter.
+    $hrs = [int]$Match.Groups['hh'].Value
+    $min = [int]$Match.Groups['mm'].Value
+    $sec = [int]$Match.Groups['ss'].Value
 
-    if ($h -gt 23 -or $m -gt 59 -or $s -gt 59) {
-        throw ("counter {0}{1}{2}{3} is not a valid time" -f $M.Groups['c'].Value, $M.Groups['hh'].Value, $M.Groups['mm'].Value, $M.Groups['ss'].Value)
+    if ($hrs -gt 23 -or $min -gt 59 -or $sec -gt 59) {
+        throw ("counter {0}{1}{2}{3} is not a valid time" -f `
+               $Match.Groups['c'].Value, $Match.Groups['hh'].Value, `
+               $Match.Groups['mm'].Value, $Match.Groups['ss'].Value)
     }
 
-    $t = (New-TimeSpan -Hours $h -Minutes $m -Seconds $s).Add([TimeSpan]::FromSeconds($Seconds))
-    $wrapped = ($t.TotalSeconds -ge 86400 -or $t.TotalSeconds -lt 0)
-    $t = [TimeSpan]::FromSeconds((($t.TotalSeconds % 86400) + 86400) % 86400)
+    $span = (New-TimeSpan -Hours $hrs -Minutes $min -Seconds $sec).Add([TimeSpan]::FromSeconds($Seconds))
+    $wrapped = ($span.TotalSeconds -ge 86400 -or $span.TotalSeconds -lt 0)
+    $span = [TimeSpan]::FromSeconds((($span.TotalSeconds % 86400) + 86400) % 86400)
 
     return [pscustomobject]@{
-        Counter = ('{0}{1:00}{2:00}{3:00}' -f $M.Groups['c'].Value, $t.Hours, $t.Minutes, $t.Seconds)
+        Counter = ('{0}{1:00}{2:00}{3:00}' -f $Match.Groups['c'].Value, $span.Hours, $span.Minutes, $span.Seconds)
         Wrapped = $wrapped
     }
 }
@@ -172,7 +176,7 @@ try {
         $attempt = 0; $newIndx = $null; $newPull = $null; $newCounter = $null
         while ($attempt -lt $MaxAttempts) {
             $attempt++
-            $shift = Get-ShiftedName -M $m -Seconds ($Increment + $attempt - 1)
+            $shift = Get-ShiftedName -Match $m -Seconds ($Increment + $attempt - 1)
             if ($shift.Wrapped) {
                 Log "    NOTE counter wrapped past midnight; the Julian day segment was NOT changed"
             }
