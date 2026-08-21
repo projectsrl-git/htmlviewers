@@ -40,13 +40,22 @@
     Wildcard applied when Path names a directory. Default *INDX*.
 
 .PARAMETER Tag
-    One or more elements to check, e.g. ELAR:AccountID. With a prefix the match is
-    exact; without one ("AccountID") any prefix matches.
+    Elements to check, e.g. ELAR:AccountID. With a prefix the match is exact; without
+    one ("AccountID") any prefix matches.
+
+    Accepts a PowerShell array, a single comma- or semicolon-separated string, or a
+    mixture: -Tag ELAR:AccountID,ELAR:CaseId and -Tag "ELAR:AccountID,ELAR:CaseId"
+    are equivalent. The string form is what a workflow step passes as one parameter.
 
 .PARAMETER Value
-    Placeholder written into empty elements. Required with -Fix. Keep it short and
-    unambiguous, and remember it becomes archived data: something like "-" or "N/A"
-    is traceable, a plausible-looking number is not.
+    Placeholder written into empty elements. Required with -Fix.
+
+    Either one value applied to every tag, or a comma-separated list matching the
+    tags one to one: -Tag "AccountID,CaseId" -Value "-,N/A" fills AccountID with "-"
+    and CaseId with "N/A". A count mismatch is an error rather than a silent reuse.
+
+    Remember this becomes archived data. "-" or "N/A" stay recognisable as a missing
+    value; a plausible-looking number is indistinguishable from a real one.
 
 .PARAMETER Fix
     Write the placeholder into empty elements, in place.
@@ -71,6 +80,10 @@
 
 .EXAMPLE
     .\Set-ElarEmptyTag.ps1 -Path "...INDX.C113912" -Tag ELAR:AccountID -Value "-" -Fix
+
+.EXAMPLE
+    .\Set-ElarEmptyTag.ps1 -Path "...INDX.C113912" `
+        -Tag "ELAR:AccountID,ELAR:CaseId,ELAR:AltClientId" -Value "-" -Fix
 
 .NOTES
     Windows PowerShell 5.1 and PowerShell 7 compatible.
@@ -111,26 +124,48 @@ function Log {
     [Console]::Out.Flush()
 }
 
+# A workflow step passes one string, so accept "a,b;c" as well as an array.
+$Tag = @($Tag | ForEach-Object { $_ -split '[,;]' } |
+                ForEach-Object { $_.Trim() } |
+                Where-Object  { $_ } )
+if ($Tag.Count -eq 0) { throw "-Tag is empty." }
+$Tag = @($Tag | Select-Object -Unique)
+
 if ($Fix -and [string]::IsNullOrEmpty($Value)) { throw "-Fix requires -Value." }
 
-# XML-escape the placeholder: it becomes element content.
-$escaped = $null
-if ($null -ne $Value) {
-    $escaped = $Value.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')
+# One value for every tag, or one value per tag in the same order.
+$values = @()
+if (-not [string]::IsNullOrEmpty($Value)) {
+    $values = @($Value -split ',' | ForEach-Object { $_.Trim() })
+    if ($values.Count -eq 1) {
+        $values = @(1..$Tag.Count | ForEach-Object { $values[0] })
+    }
+    elseif ($values.Count -ne $Tag.Count) {
+        throw ("-Value has {0} entries but -Tag has {1}. Give one value for all tags, or one per tag." -f `
+               $values.Count, $Tag.Count)
+    }
 }
 
 try { $enc = [System.Text.Encoding]::GetEncoding($Encoding) }
 catch { throw "Unknown charset '$Encoding'. Try windows-1252, ISO-8859-1, or utf-8." }
 
 function New-TagPattern {
-    param([string] $Name)
+    param([string] $Name, [string] $Placeholder)
 
     if ($Name.Contains(':')) { $n = [regex]::Escape($Name) }
     else { $n = '(?:[A-Za-z0-9_.\-]+:)?' + [regex]::Escape($Name) }
 
     $opts = [System.Text.RegularExpressions.RegexOptions]::None
+
+    # XML-escape the placeholder: it becomes element content.
+    $esc = $null
+    if ($null -ne $Placeholder) {
+        $esc = $Placeholder.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')
+    }
+
     return [pscustomobject]@{
         Name    = $Name
+        Escaped = $esc
         # Any occurrence, open or self-closed.
         Any     = New-Object System.Text.RegularExpressions.Regex ('<' + $n + '(?=[\s/>])'), $opts
         # Self-closed:  <X/>  or  <X attr="v"/>
@@ -141,7 +176,10 @@ function New-TagPattern {
 }
 
 $patterns = @()
-foreach ($t in $Tag) { $patterns += New-TagPattern -Name $t }
+for ($k = 0; $k -lt $Tag.Count; $k++) {
+    $ph = if ($values.Count -gt 0) { $values[$k] } else { $null }
+    $patterns += New-TagPattern -Name $Tag[$k] -Placeholder $ph
+}
 
 $reDoc = New-Object System.Text.RegularExpressions.Regex `
     ('<(?:[A-Za-z0-9_.\-]+:)?' + [regex]::Escape($DocElement) + '(?=[\s>])')
@@ -171,8 +209,11 @@ try {
     }
 
     $mode = if ($Fix) { 'FIX' } else { 'REPORT' }
-    Log ("START mode={0} files={1} tags={2} value='{3}' doc={4} charset={5}" -f `
-         $mode, $files.Count, ($Tag -join ','), $Value, $DocElement, $Encoding)
+    $pairsShown = if ($values.Count -gt 0) {
+        (0..($Tag.Count - 1) | ForEach-Object { '{0}=''{1}''' -f $Tag[$_], $values[$_] }) -join ' '
+    } else { ($Tag -join ',') }
+    Log ("START mode={0} files={1} tags={2} doc={3} charset={4}" -f `
+         $mode, $files.Count, $pairsShown, $DocElement, $Encoding)
 
     $i = 0; $filesChanged = 0; $totalFilled = 0; $totalMissing = 0; $totalDup = 0
 
@@ -192,6 +233,14 @@ try {
         # Per-document counters, one slot per requested tag.
         $seen  = New-Object int[] $patterns.Count
         $blank = New-Object int[] $patterns.Count
+        $fillPerTag = New-Object int[] $patterns.Count
+        # Per-tag record lists, so a run over several tags stays diagnosable.
+        $emptyByTag   = @(); $missingByTag = @(); $dupByTag = @()
+        for ($k = 0; $k -lt $patterns.Count; $k++) {
+            $emptyByTag   += ,(New-Object 'System.Collections.Generic.List[int]')
+            $missingByTag += ,(New-Object 'System.Collections.Generic.List[int]')
+            $dupByTag     += ,(New-Object 'System.Collections.Generic.List[int]')
+        }
 
         $swOne = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -227,9 +276,9 @@ try {
                     for ($d = 0; $d -lt $docHits; $d++) {
                         if ($record -gt 0) {
                             for ($k = 0; $k -lt $patterns.Count; $k++) {
-                                if     ($seen[$k] -eq 0) { [void]$missingRecs.Add($record) }
-                                elseif ($seen[$k] -gt 1) { [void]$dupRecs.Add($record) }
-                                if ($blank[$k] -gt 0)    { [void]$emptyRecs.Add($record) }
+                                if     ($seen[$k] -eq 0) { [void]$missingRecs.Add($record); [void]$missingByTag[$k].Add($record) }
+                                elseif ($seen[$k] -gt 1) { [void]$dupRecs.Add($record);     [void]$dupByTag[$k].Add($record) }
+                                if ($blank[$k] -gt 0)    { [void]$emptyRecs.Add($record);   [void]$emptyByTag[$k].Add($record) }
                             }
                         }
                         $record++
@@ -246,9 +295,10 @@ try {
                                 $blank[$k] += $b
                                 if ($Fix) {
                                     # Preserve the original prefix and any attributes.
-                                    $line = $pt.Self.Replace($line, ('<$1$2>' + $escaped + '</$1>'))
-                                    $line = $pt.Pair.Replace($line, ('<$1$2>' + $escaped + '</$1>'))
+                                    $line = $pt.Self.Replace($line, ('<$1$2>' + $pt.Escaped + '</$1>'))
+                                    $line = $pt.Pair.Replace($line, ('<$1$2>' + $pt.Escaped + '</$1>'))
                                     $filled += $b
+                                    $fillPerTag[$k] += $b
                                 }
                             }
                         }
@@ -261,9 +311,9 @@ try {
             # Close the last record.
             if ($record -gt 0) {
                 for ($k = 0; $k -lt $patterns.Count; $k++) {
-                    if     ($seen[$k] -eq 0) { [void]$missingRecs.Add($record) }
-                    elseif ($seen[$k] -gt 1) { [void]$dupRecs.Add($record) }
-                    if ($blank[$k] -gt 0)    { [void]$emptyRecs.Add($record) }
+                    if     ($seen[$k] -eq 0) { [void]$missingRecs.Add($record); [void]$missingByTag[$k].Add($record) }
+                    elseif ($seen[$k] -gt 1) { [void]$dupRecs.Add($record);     [void]$dupByTag[$k].Add($record) }
+                    if ($blank[$k] -gt 0)    { [void]$emptyRecs.Add($record);   [void]$emptyByTag[$k].Add($record) }
                 }
             }
         }
@@ -277,15 +327,22 @@ try {
         Log ("    scanned records={0:n0} lines={1:n0} elapsed={2:n1}s" -f $record, $lineNo, $swOne.Elapsed.TotalSeconds)
         Log ("    empty={0} missing={1} duplicate={2}" -f $emptyRecs.Count, $missingRecs.Count, $dupRecs.Count)
 
-        foreach ($pair in @(
-            @{ N = 'empty';     L = $emptyRecs },
-            @{ N = 'missing';   L = $missingRecs },
-            @{ N = 'duplicate'; L = $dupRecs })) {
+        # Report per tag: with several tags a combined list says nothing useful.
+        for ($k = 0; $k -lt $patterns.Count; $k++) {
+            $tn = $patterns[$k].Name
+            foreach ($pair in @(
+                @{ N = 'empty';     L = $emptyByTag[$k] },
+                @{ N = 'missing';   L = $missingByTag[$k] },
+                @{ N = 'duplicate'; L = $dupByTag[$k] })) {
 
-            if ($pair.L.Count -gt 0) {
-                $shown = @($pair.L | Select-Object -First $MaxReport) -join ','
-                $more  = if ($pair.L.Count -gt $MaxReport) { (' ... +{0} more' -f ($pair.L.Count - $MaxReport)) } else { '' }
-                Log ("    {0} records: {1}{2}" -f $pair.N, $shown, $more)
+                if ($pair.L.Count -gt 0) {
+                    $shown = @($pair.L | Select-Object -First $MaxReport) -join ','
+                    $more  = if ($pair.L.Count -gt $MaxReport) { (' ... +{0} more' -f ($pair.L.Count - $MaxReport)) } else { '' }
+                    Log ("    {0} {1}={2} records: {3}{4}" -f $tn, $pair.N, $pair.L.Count, $shown, $more)
+                }
+            }
+            if ($Fix -and $fillPerTag[$k] -gt 0) {
+                Log ("    {0} filled={1}" -f $tn, $fillPerTag[$k])
             }
         }
 
