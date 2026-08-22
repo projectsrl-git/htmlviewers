@@ -91,6 +91,31 @@
     with OR, wrapped in parentheses, so the result stays valid however many keys
     there are.
 
+.PARAMETER KeepPrefix
+    Keep the namespace prefix in the CSV header, so the column is ELAR:RecordId
+    rather than RecordId. Off by default: the header carries local names, and the
+    generated properties file maps each one back to its fully qualified element.
+
+.PARAMETER NewlineInValue
+    What to do with a value that contains a line break.
+
+      SPACE  (default) replace each break with a single space
+      STRIP  remove the break, joining the halves
+      KEEP   leave it, quoting the field
+
+    KEEP produces a CSV that is formally correct but spans several physical lines per
+    record, which a line-oriented reader - the legacy one included - splits into
+    different records. SPACE keeps one line per record at the cost of altering the
+    value; the count of altered values is always reported so the change is never
+    silent.
+
+    Note that a line break inside a metadata value is itself a known defect of the
+    legacy writer, not real data. A non-zero count here usually means the source INDX
+    carries corrupted values.
+
+.PARAMETER NoVerify
+    Skip the verification pass over the CSV just written.
+
 .PARAMETER MaxDocs
     Stop after this many documents per file. 0 means all.
 
@@ -143,7 +168,14 @@ param(
 
     [string] $WhereColumnName,
 
-    [int] $MaxInItems = 1000
+    [int] $MaxInItems = 1000,
+
+    [switch] $KeepPrefix,
+
+    [ValidateSet('KEEP', 'SPACE', 'STRIP')]
+    [string] $NewlineInValue = 'SPACE',
+
+    [switch] $NoVerify
 )
 
 Set-StrictMode -Version 2.0
@@ -193,6 +225,105 @@ if ($ContentDir -and -not (Test-Path -LiteralPath $ContentDir)) {
 $exitCode = 0
 
 # ---------------------------------------------------------------------------
+
+function Get-DisplayName {
+    param([string] $Name)
+    if ($KeepPrefix) { return $Name }
+    $i = $Name.IndexOf(':')
+    if ($i -ge 0) { return $Name.Substring($i + 1) }
+    return $Name
+}
+
+<#
+    Reads the CSV back with a proper quoted parser and checks two things: that every
+    record has exactly as many fields as the header, and that the record count
+    matches what was extracted. Together those catch a truncated write, a stray
+    separator, and an unbalanced quote - the three ways this file can be wrong in a
+    manner that is invisible until something downstream mis-parses it.
+#>
+function Test-CsvIntegrity {
+    param(
+        [string]               $Csv,
+        [string]               $Sep,
+        [int]                  $ExpectedRecords,
+        [System.Text.Encoding] $Enc
+    )
+
+    $sepCh = $Sep[0]
+    $reader = $null
+    $header = -1; $records = 0; $bad = New-Object 'System.Collections.Generic.List[string]'
+    $multiline = 0; $lastFieldCount = 0
+
+    try {
+        $reader = New-Object System.IO.StreamReader($Csv, $Enc, $false, 1048576)
+
+        $fields = 1
+        $inQuote = $false
+        $sawAny = $false
+        $recordSpansLines = $false
+        $physLine = 1
+
+        while (($ch = $reader.Read()) -ge 0) {
+            $c = [char]$ch
+            $sawAny = $true
+
+            if ($inQuote) {
+                if ($c -eq '"') {
+                    if ([char]$reader.Peek() -eq '"') { [void]$reader.Read() }  # escaped quote
+                    else { $inQuote = $false }
+                }
+                elseif ($c -eq "`n") { $recordSpansLines = $true; $physLine++ }
+                continue
+            }
+
+            if ($c -eq '"')      { $inQuote = $true; continue }
+            if ($c -eq $sepCh)   { $fields++; continue }
+            if ($c -eq "`r")     { continue }
+
+            if ($c -eq "`n") {
+                $physLine++
+                if ($header -lt 0) { $header = $fields }
+                else {
+                    $records++
+                    if ($fields -ne $header) {
+                        if ($bad.Count -lt 20) {
+                            [void]$bad.Add(('record {0} has {1} field(s), header has {2}' -f $records, $fields, $header))
+                        }
+                    }
+                    if ($recordSpansLines) { $multiline++ }
+                }
+                $lastFieldCount = $fields
+                $fields = 1
+                $recordSpansLines = $false
+            }
+        }
+
+        # A final record without a trailing newline still counts.
+        if ($sawAny -and $fields -gt 1) {
+            if ($header -lt 0) { $header = $fields }
+            else {
+                $records++
+                if ($fields -ne $header -and $bad.Count -lt 20) {
+                    [void]$bad.Add(('record {0} has {1} field(s), header has {2}' -f $records, $fields, $header))
+                }
+                if ($recordSpansLines) { $multiline++ }
+            }
+        }
+
+        $unbalanced = $inQuote
+    }
+    finally { if ($reader) { $reader.Dispose() } }
+
+    return [pscustomobject]@{
+        HeaderFields = $header
+        Records      = $records
+        Mismatches   = $bad
+        Multiline    = $multiline
+        Unbalanced   = $unbalanced
+        Truncated    = ($records -ne $ExpectedRecords)
+        Expected     = $ExpectedRecords
+    }
+}
 
 function Write-WhereClause {
     param(
@@ -252,7 +383,10 @@ function Export-OneIndx {
 
     $columns = New-Object 'System.Collections.Generic.List[string]'
     $colSet  = New-Object 'System.Collections.Generic.HashSet[string]'
+    $colFull = @{}     # display name -> fully qualified element name
+    $collide = New-Object 'System.Collections.Generic.List[string]'
     $rows    = New-Object 'System.Collections.Generic.List[hashtable]'
+    $newlineValues = 0
 
     $docs = 0; $payloads = 0; $payloadBytes = 0L; $emptyDocId = 0
     $parseError = $null
@@ -319,9 +453,15 @@ function Export-OneIndx {
 
                         $outFile = Join-Path $ContentDir (($id -replace '[\\/:*?"<>|]', '_') + $ext)
 
-                        if (-not $colSet.Contains($name)) { [void]$colSet.Add($name); $columns.Add($name) }
+                        $disp = Get-DisplayName -Name $name
+                        if (-not $colSet.Contains($disp)) {
+                            [void]$colSet.Add($disp); $columns.Add($disp); $colFull[$disp] = $name
+                        }
+                        elseif ($colFull[$disp] -ne $name -and $collide.Count -lt 10) {
+                            [void]$collide.Add(('{0} <- {1} and {2}' -f $disp, $colFull[$disp], $name))
+                        }
 
-                        if ($reader.IsEmptyElement) { $cur[$name] = '' ; break }
+                        if ($reader.IsEmptyElement) { $cur[$disp] = '' ; break }
 
                         $stream = [System.IO.File]::Create($outFile)
                         try {
@@ -337,14 +477,17 @@ function Export-OneIndx {
                         finally { $stream.Dispose() }
 
                         $payloads++
-                        $cur[$name] = $outFile
+                        $cur[$disp] = $outFile
                         break
                     }
 
                     if ($reader.IsEmptyElement) {
                         # Self-closed: a present but valueless element.
-                        if (-not $colSet.Contains($name)) { [void]$colSet.Add($name); $columns.Add($name) }
-                        $cur[$name] = ''
+                        $disp = Get-DisplayName -Name $name
+                        if (-not $colSet.Contains($disp)) {
+                            [void]$colSet.Add($disp); $columns.Add($disp); $colFull[$disp] = $name
+                        }
+                        $cur[$disp] = ''
                         $pending = $null
                     }
                     else {
@@ -357,8 +500,17 @@ function Export-OneIndx {
 
                 ([System.Xml.XmlNodeType]::Text) {
                     if ($null -ne $cur -and $null -ne $pending) {
-                        if (-not $colSet.Contains($pending)) { [void]$colSet.Add($pending); $columns.Add($pending) }
-                        $cur[$pending] = $reader.Value
+                        $disp = Get-DisplayName -Name $pending
+                        if (-not $colSet.Contains($disp)) {
+                            [void]$colSet.Add($disp); $columns.Add($disp); $colFull[$disp] = $pending
+                        }
+                        $v = $reader.Value
+                        if ($v.IndexOf("`n") -ge 0 -or $v.IndexOf("`r") -ge 0) {
+                            $newlineValues++
+                            if     ($NewlineInValue -eq 'SPACE') { $v = $v -replace "`r`n", ' ' -replace "[`r`n]", ' ' }
+                            elseif ($NewlineInValue -eq 'STRIP') { $v = $v -replace "`r`n", ''  -replace "[`r`n]", '' }
+                        }
+                        $cur[$disp] = $v
                         $pending = $null
                     }
                     break
@@ -366,8 +518,11 @@ function Export-OneIndx {
 
                 ([System.Xml.XmlNodeType]::CDATA) {
                     if ($null -ne $cur -and $null -ne $pending) {
-                        if (-not $colSet.Contains($pending)) { [void]$colSet.Add($pending); $columns.Add($pending) }
-                        $cur[$pending] = $reader.Value
+                        $disp = Get-DisplayName -Name $pending
+                        if (-not $colSet.Contains($disp)) {
+                            [void]$colSet.Add($disp); $columns.Add($disp); $colFull[$disp] = $pending
+                        }
+                        $cur[$disp] = $reader.Value
                         $pending = $null
                     }
                     break
@@ -381,8 +536,11 @@ function Export-OneIndx {
                     else {
                         # A container closing, or a leaf that turned out to be empty.
                         if ($null -ne $cur -and $null -ne $pending -and $reader.Name -eq $pending) {
-                            if (-not $colSet.Contains($pending)) { [void]$colSet.Add($pending); $columns.Add($pending) }
-                            $cur[$pending] = ''
+                            $disp = Get-DisplayName -Name $pending
+                            if (-not $colSet.Contains($disp)) {
+                                [void]$colSet.Add($disp); $columns.Add($disp); $colFull[$disp] = $pending
+                            }
+                            $cur[$disp] = ''
                         }
                         $pending = $null
                     }
@@ -446,7 +604,9 @@ function Export-OneIndx {
                 Error = ("key element '{0}' not found; columns are: {1}" -f $UniqueKeyWhereCondition, ($columns -join ', '))
                 Rows = $rows.Count; Columns = $columns.Count; Quoted = $quoted
                 Payloads = $payloads; PayloadBytes = $payloadBytes; Columns2 = $columns
+                ColFull = $colFull; Collisions = $collide; NewlineValues = $newlineValues
                 KeyTotal = 0; KeyUnique = 0; KeyEmpty = 0; KeyChunks = 0; KeyColumn = ''
+                Verify = $null
             }
         }
 
@@ -470,11 +630,19 @@ function Export-OneIndx {
         }
     }
 
+    # --- verify what was written ---
+    $verify = $null
+    if (-not $NoVerify) {
+        $verify = Test-CsvIntegrity -Csv $Csv -Sep $Separator -ExpectedRecords $rows.Count -Enc $Enc
+    }
+
     return [pscustomobject]@{
         Ok = $true; Error = ''; Rows = $rows.Count; Columns = $columns.Count
         Quoted = $quoted; Payloads = $payloads; PayloadBytes = $payloadBytes; Columns2 = $columns
+        ColFull = $colFull; Collisions = $collide; NewlineValues = $newlineValues
         KeyTotal = $keyTotal; KeyUnique = $keyUnique; KeyEmpty = $keyEmpty
         KeyChunks = $keyChunks; KeyColumn = $keyCol
+        Verify = $verify
     }
 }
 
@@ -482,6 +650,7 @@ function Export-OneIndx {
 
 $script:emptyIdSeen = 0
 $allColumns = $null
+$allColFull = $null
 $i = 0
 
 Log ("START files={0} charset={1} contentDir={2}" -f $files.Count, $Encoding, $(if ($ContentDir) { $ContentDir } else { '(none)' }))
@@ -502,6 +671,39 @@ foreach ($f in $files) {
     }
 
     Log ("    documents={0} columns={1} quotedValues={2}" -f $r.Rows, $r.Columns, $r.Quoted)
+
+    if ($r.NewlineValues -gt 0) {
+        Log ("    NOTE {0} value(s) contained a line break; policy={1}" -f $r.NewlineValues, $NewlineInValue)
+        Log  "    NOTE a line break inside a metadata value is a defect of the source INDX, not data"
+        if ($exitCode -eq 0) { $exitCode = 2 }
+    }
+    if (@($r.Collisions).Count -gt 0) {
+        Log ("    WARNING {0} column name collision(s) after dropping the prefix:" -f @($r.Collisions).Count)
+        foreach ($c in @($r.Collisions)) { Log ("      {0}" -f $c) }
+        Log  "    WARNING re-run with -KeepPrefix to keep the columns distinct"
+        $exitCode = 2
+    }
+
+    if ($null -ne $r.Verify) {
+        $v = $r.Verify
+        Log ("    verify headerFields={0} records={1} multilineRecords={2}" -f $v.HeaderFields, $v.Records, $v.Multiline)
+        if ($v.Unbalanced) {
+            Log  "    ERROR unbalanced quote: the CSV is truncated or malformed"
+            $exitCode = 1
+        }
+        if ($v.Truncated) {
+            Log ("    ERROR record count {0} does not match the {1} document(s) extracted" -f $v.Records, $v.Expected)
+            $exitCode = 1
+        }
+        if (@($v.Mismatches).Count -gt 0) {
+            Log ("    ERROR {0} record(s) do not have the header's field count:" -f @($v.Mismatches).Count)
+            foreach ($m in @($v.Mismatches)) { Log ("      {0}" -f $m) }
+            $exitCode = 1
+        }
+        if (-not $v.Unbalanced -and -not $v.Truncated -and @($v.Mismatches).Count -eq 0) {
+            Log  "    verify=OK every record has the header's field count"
+        }
+    }
     if ($ContentDir) {
         Log ("    payloadsDecoded={0} payloadBytes={1:n0}" -f $r.Payloads, $r.PayloadBytes)
     }
@@ -524,7 +726,7 @@ foreach ($f in $files) {
         Log  "    NOTE the legacy reader does not understand quoting, so it could not have produced these rows"
         if ($exitCode -eq 0) { $exitCode = 2 }
     }
-    if ($null -eq $allColumns) { $allColumns = $r.Columns2 }
+    if ($null -eq $allColumns) { $allColumns = $r.Columns2; $allColFull = $r.ColFull }
 }
 
 if ($script:emptyIdSeen -gt 0) {
@@ -541,7 +743,10 @@ if ($PropertiesOut -and $null -ne $allColumns -and $allColumns.Count -gt 0) {
         if (-not $idCol) { $idCol = $allColumns[0] }
         $p.Write(("{0}.input.doc_id_reference={1}`n" -f $FamilyType, $idCol))
         foreach ($c in $allColumns) {
-            $p.Write(("{0}.tagNameMapping.{1}={1}`n" -f $FamilyType, $c))
+            # The CSV header carries the local name; the mapping points it back at
+            # the fully qualified element the template expects.
+            $full = if ($allColFull -and $allColFull.ContainsKey($c)) { $allColFull[$c] } else { $c }
+            $p.Write(("{0}.tagNameMapping.{1}={2}`n" -f $FamilyType, $c, $full))
         }
     }
     finally { $p.Dispose() }
