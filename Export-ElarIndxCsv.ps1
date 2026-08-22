@@ -67,6 +67,30 @@
 .PARAMETER Encoding
     Charset used to read the INDX and write the CSV. Default windows-1252.
 
+.PARAMETER UniqueKeyWhereCondition
+    Name of the element holding the key, e.g. ELAR:RecordId or just RecordId. When
+    given, a .txt is written next to the CSV containing a ready-to-paste SQL IN
+    clause listing every key in the file, for querying the source system about
+    exactly the documents this INDX carries.
+
+    Values are single-quoted and embedded quotes are doubled. Duplicates are removed
+    and counted: a repeated key in an INDX is itself a defect worth knowing about.
+
+.PARAMETER WhereOut
+    Destination for the IN clause. Defaults to the CSV path with .where.txt appended.
+    Only valid with a single input file.
+
+.PARAMETER WhereColumnName
+    Column name to use inside the SQL clause. Defaults to the local name of the key
+    element, so ELAR:RecordId becomes RecordId. Set it when the source column is
+    named differently from the XML element.
+
+.PARAMETER MaxInItems
+    Maximum values per IN list. Default 1000, which is Oracle's limit on expressions
+    in an IN clause. Beyond it the clause is split into several IN lists combined
+    with OR, wrapped in parentheses, so the result stays valid however many keys
+    there are.
+
 .PARAMETER MaxDocs
     Stop after this many documents per file. 0 means all.
 
@@ -111,7 +135,15 @@ param(
 
     [string] $Encoding = 'windows-1252',
 
-    [int] $MaxDocs = 0
+    [int] $MaxDocs = 0,
+
+    [string] $UniqueKeyWhereCondition,
+
+    [string] $WhereOut,
+
+    [string] $WhereColumnName,
+
+    [int] $MaxInItems = 1000
 )
 
 Set-StrictMode -Version 2.0
@@ -149,6 +181,10 @@ if ($files.Count -eq 0) {
 if ($files.Count -gt 1 -and $CsvOut) {
     throw "-CsvOut names a single destination but $($files.Count) files matched. Omit it to write one CSV per input."
 }
+if ($files.Count -gt 1 -and $WhereOut) {
+    throw "-WhereOut names a single destination but $($files.Count) files matched. Omit it to write one file per input."
+}
+if ($MaxInItems -lt 1) { throw "-MaxInItems must be at least 1." }
 
 if ($ContentDir -and -not (Test-Path -LiteralPath $ContentDir)) {
     New-Item -ItemType Directory -Path $ContentDir -Force | Out-Null
@@ -158,10 +194,57 @@ $exitCode = 0
 
 # ---------------------------------------------------------------------------
 
+function Write-WhereClause {
+    param(
+        [string[]]             $Values,
+        [string]               $Column,
+        [string]               $Destination,
+        [int]                  $ChunkSize,
+        [System.Text.Encoding] $Enc
+    )
+
+    $w = New-Object System.IO.StreamWriter($Destination, $false, $Enc)
+    try {
+        $chunks = [Math]::Ceiling($Values.Count / [double]$ChunkSize)
+
+        # Several IN lists are combined with OR and wrapped, so the clause stays
+        # valid past the database's limit on expressions in a single IN.
+        if ($chunks -gt 1) { $w.Write("(`n") }
+
+        for ($c = 0; $c -lt $chunks; $c++) {
+            $slice = $Values[($c * $ChunkSize) .. ([Math]::Min(($c + 1) * $ChunkSize, $Values.Count) - 1)]
+
+            if ($c -gt 0) { $w.Write("`nOR`n") }
+            $w.Write($Column); $w.Write(" IN (`n")
+
+            $line = New-Object System.Text.StringBuilder
+            for ($k = 0; $k -lt $slice.Count; $k++) {
+                $item = "'" + ($slice[$k].Replace("'", "''")) + "'"
+                if ($k -lt $slice.Count - 1) { $item += ',' }
+                # Wrap for readability: these files are read by people.
+                if ($line.Length + $item.Length -gt 100) {
+                    $w.Write($line.ToString()); $w.Write("`n")
+                    $line.Length = 0
+                }
+                [void]$line.Append($item)
+            }
+            if ($line.Length -gt 0) { $w.Write($line.ToString()); $w.Write("`n") }
+            $w.Write(")")
+        }
+
+        if ($chunks -gt 1) { $w.Write("`n)") }
+        $w.Write("`n")
+    }
+    finally { $w.Dispose() }
+
+    return $chunks
+}
+
 function Export-OneIndx {
     param(
         [System.IO.FileInfo]   $File,
         [string]               $Csv,
+        [string]               $Where,
         [System.Text.Encoding] $Enc
     )
 
@@ -348,9 +431,50 @@ function Export-OneIndx {
     }
     finally { $out.Dispose() }
 
+    # --- optional IN clause over the key column ---
+    $keyTotal = 0; $keyUnique = 0; $keyEmpty = 0; $keyChunks = 0; $keyCol = ''
+
+    if ($UniqueKeyWhereCondition) {
+        $keyCol = @($columns | Where-Object {
+                        $_ -eq $UniqueKeyWhereCondition -or
+                        $_ -like ('*:' + $UniqueKeyWhereCondition)
+                    }) | Select-Object -First 1
+
+        if (-not $keyCol) {
+            return [pscustomobject]@{
+                Ok = $false
+                Error = ("key element '{0}' not found; columns are: {1}" -f $UniqueKeyWhereCondition, ($columns -join ', '))
+                Rows = $rows.Count; Columns = $columns.Count; Quoted = $quoted
+                Payloads = $payloads; PayloadBytes = $payloadBytes; Columns2 = $columns
+                KeyTotal = 0; KeyUnique = 0; KeyEmpty = 0; KeyChunks = 0; KeyColumn = ''
+            }
+        }
+
+        $seenKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+        $ordered  = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($r in $rows) {
+            $v = if ($r.ContainsKey($keyCol)) { [string]$r[$keyCol] } else { '' }
+            if ([string]::IsNullOrWhiteSpace($v)) { $keyEmpty++; continue }
+            $keyTotal++
+            # Order of first appearance, so the clause mirrors the file.
+            if ($seenKeys.Add($v)) { $ordered.Add($v) }
+        }
+        $keyUnique = $ordered.Count
+
+        $sqlName = if ($WhereColumnName) { $WhereColumnName }
+                   else { $keyCol.Substring($keyCol.IndexOf(':') + 1) }
+
+        if ($ordered.Count -gt 0) {
+            $keyChunks = Write-WhereClause -Values $ordered.ToArray() -Column $sqlName `
+                                           -Destination $Where -ChunkSize $MaxInItems -Enc $Enc
+        }
+    }
+
     return [pscustomobject]@{
         Ok = $true; Error = ''; Rows = $rows.Count; Columns = $columns.Count
         Quoted = $quoted; Payloads = $payloads; PayloadBytes = $payloadBytes; Columns2 = $columns
+        KeyTotal = $keyTotal; KeyUnique = $keyUnique; KeyEmpty = $keyEmpty
+        KeyChunks = $keyChunks; KeyColumn = $keyCol
     }
 }
 
@@ -365,9 +489,10 @@ Log ("START files={0} charset={1} contentDir={2}" -f $files.Count, $Encoding, $(
 foreach ($f in $files) {
     $i++
     $csv = if ($CsvOut) { $CsvOut } else { $f.FullName + '.csv' }
+    $whr = if ($WhereOut) { $WhereOut } else { $csv + '.where.txt' }
     Log ("[{0}/{1}] {2}  {3:n1} MB -> {4}" -f $i, $files.Count, $f.Name, ($f.Length / 1MB), $csv)
 
-    $r = Export-OneIndx -File $f -Csv $csv -Enc $enc
+    $r = Export-OneIndx -File $f -Csv $csv -Where $whr -Enc $enc
 
     if (-not $r.Ok) {
         Log ("    ERROR {0}" -f $r.Error)
@@ -379,6 +504,20 @@ foreach ($f in $files) {
     Log ("    documents={0} columns={1} quotedValues={2}" -f $r.Rows, $r.Columns, $r.Quoted)
     if ($ContentDir) {
         Log ("    payloadsDecoded={0} payloadBytes={1:n0}" -f $r.Payloads, $r.PayloadBytes)
+    }
+    if ($UniqueKeyWhereCondition -and $r.KeyUnique -gt 0) {
+        Log ("    key={0} values={1} unique={2} empty={3} inLists={4}" -f `
+             $r.KeyColumn, $r.KeyTotal, $r.KeyUnique, $r.KeyEmpty, $r.KeyChunks)
+        Log ("    where={0}" -f $whr)
+        if ($r.KeyTotal -ne $r.KeyUnique) {
+            Log ("    NOTE {0} duplicate key value(s): a repeated id in one INDX is itself a defect" -f `
+                 ($r.KeyTotal - $r.KeyUnique))
+            if ($exitCode -eq 0) { $exitCode = 2 }
+        }
+        if ($r.KeyEmpty -gt 0) {
+            Log ("    NOTE {0} document(s) have no value for the key" -f $r.KeyEmpty)
+            if ($exitCode -eq 0) { $exitCode = 2 }
+        }
     }
     if ($r.Quoted -gt 0) {
         Log ("    NOTE {0} value(s) contain the separator and were quoted" -f $r.Quoted)
