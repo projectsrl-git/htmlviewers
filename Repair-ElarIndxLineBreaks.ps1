@@ -250,7 +250,14 @@ function Invoke-IndxScan {
     $reader = $null; $writer = $null; $fs = $null
     $markupBreaks = 0; $valueBreaks = 0; $docCount = 0; $lineNo = 0; $fastPath = 0
     $badAngles = 0
-    $reBadAngle = New-Object System.Text.RegularExpressions.Regex '<[ \t]+(?=[A-Za-z_])'
+    # Whitespace is illegal immediately after '<' of a start tag, after '<' of an
+    # end tag ("< /Name"), and after "</" ("</ Name"). All three forms have been seen
+    # in delivered files.
+    $reBadAngle  = New-Object System.Text.RegularExpressions.Regex '<[ \t]+(?=[A-Za-z_/!?])'
+    $reBadClose  = New-Object System.Text.RegularExpressions.Regex '</[ \t]+(?=[A-Za-z_])'
+    # Counted here rather than in the fast path: a line can hold several documents,
+    # and the record number is what ELAR reports back.
+    $reDocStart = New-Object System.Text.RegularExpressions.Regex '<(?:[A-Za-z0-9_.\-]+:)?Doc(?=[\s>])'
 
     try {
         $fs = New-Object System.IO.FileStream($File.FullName,
@@ -302,6 +309,7 @@ function Invoke-IndxScan {
                         Kind    = $kind
                         Element = $curElement
                         Line    = ($lineNo - 1)
+                        Record  = $docCount
                         Value   = $head + '<LF>' + $line.Substring(0, [Math]::Min(40, $line.Length))
                     })
 
@@ -322,11 +330,13 @@ function Invoke-IndxScan {
                 }
             }
 
+            if ($line.IndexOf('<') -ge 0) { $docCount += $reDocStart.Matches($line).Count }
+
             # Independent of line breaks: '<' followed by whitespace is an invalid
             # element start. Earlier versions of this script could introduce it while
             # repairing a break that fell immediately after '<'.
             if ($line.IndexOf('<') -ge 0) {
-                $mm = $reBadAngle.Matches($line)
+                $mm = @($reBadAngle.Matches($line)) + @($reBadClose.Matches($line))
                 if ($mm.Count -gt 0) {
                     $badAngles += $mm.Count
                     foreach ($mx in $mm) {
@@ -335,10 +345,14 @@ function Invoke-IndxScan {
                             Kind    = 'InvalidSpaceAfterAngle'
                             Element = ''
                             Line    = $lineNo
+                            Record  = $docCount
                             Value   = $line.Substring($mx.Index, [Math]::Min(40, $line.Length - $mx.Index))
                         })
                     }
-                    if ($DoFix) { $line = $reBadAngle.Replace($line, '<') }
+                    if ($DoFix) {
+                        $line = $reBadAngle.Replace($line, '<')
+                        $line = $reBadClose.Replace($line, '</')
+                    }
                 }
             }
 
@@ -355,7 +369,6 @@ function Invoke-IndxScan {
                         $j = $lt + 1
                         while ($j -lt $line.Length -and (Test-NameChar $line[$j])) { $j++ }
                         $curElement = $line.Substring($lt + 1, $j - $lt - 1)
-                        if ($line.IndexOf('<ELAR:Doc') -ge 0) { $docCount++ }
                     }
                 }
             }
@@ -481,6 +494,18 @@ try {
         Log ("    result={0} values={1} markup={2} badAngle={3}" -f `
              $label, $r.ValueBreaks, $r.MarkupBreaks, $r.BadAngles)
 
+        # Where, not just how many.
+        $shown = 0
+        foreach ($x in @($r.Findings)) {
+            if ($shown -ge 20) {
+                Log ("    ... +{0} more finding(s)" -f (@($r.Findings).Count - 20))
+                break
+            }
+            $shown++
+            $el = if ($x.Element) { $x.Element } else { '-' }
+            Log ("    at line={0} record={1} kind={2} element={3}" -f $x.Line, $x.Record, $x.Kind, $el)
+        }
+
         if (-not $Fix) {
             if ($Validate) {
                 $swV = [System.Diagnostics.Stopwatch]::StartNew()
@@ -544,7 +569,10 @@ try {
     Log ("  elapsed={0:n1}s" -f $swAll.Elapsed.TotalSeconds)
 
     if ($all.Count -gt 0) {
-        foreach ($g in ($all | Group-Object Element | Sort-Object Count -Descending)) {
+        foreach ($g in ($all | Group-Object Kind | Sort-Object Count -Descending)) {
+            Log ("  kind {0}={1}" -f $g.Name, $g.Count)
+        }
+        foreach ($g in ($all | Where-Object { $_.Element } | Group-Object Element | Sort-Object Count -Descending)) {
             Log ("  element {0}={1}" -f $g.Name, $g.Count)
         }
 
@@ -556,7 +584,7 @@ try {
         }
 
         if ($CsvOut) {
-            $export = if ($ShowValues) { $all } else { $all | Select-Object File, Kind, Element, Line }
+            $export = if ($ShowValues) { $all } else { $all | Select-Object File, Kind, Element, Line, Record }
             $export | Export-Csv -LiteralPath $CsvOut -NoTypeInformation -Encoding UTF8
             Log ("  report={0}" -f $CsvOut)
         }
@@ -565,7 +593,7 @@ try {
             Log "  NOTE markup breaks mean those files were not well-formed XML"
         }
         if ($angleN -gt 0) {
-            Log "  NOTE '< name' is an invalid element start; ELAR reports 'invalid start of an element'"
+            Log "  NOTE whitespace after '<' or '</' is invalid markup; ELAR reports 'invalid start of an element'"
         }
         if ($textN -gt 0) {
             Log "  NOTE corrupted values still parse as valid XML; the values themselves are wrong"
