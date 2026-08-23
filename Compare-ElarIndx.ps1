@@ -56,9 +56,14 @@
 .PARAMETER Encoding
     Charset used to read both files. Default windows-1252.
 
-.PARAMETER ShowValues
-    Print differing values. They contain personal data, so they are withheld by
-    default and only the element name and the kind of difference are shown.
+.PARAMETER MaskValues
+    Withhold the values and print only element names and difference kinds. The diff
+    shows values by default, because seeing them is the point of the exercise, but
+    they contain personal data: use this switch when the output is to be shared or
+    attached to a ticket.
+
+.PARAMETER MaxValueChars
+    Truncate printed values beyond this length. Default 200.
 
 .PARAMETER CsvOut
     Write the findings to a CSV.
@@ -95,11 +100,13 @@ param(
 
     [string] $Encoding = 'windows-1252',
 
-    [switch] $ShowValues,
+    [switch] $MaskValues,
 
     [string] $CsvOut,
 
-    [int] $MaxReport = 50
+    [int] $MaxReport = 50,
+
+    [int] $MaxValueChars = 200
 )
 
 Set-StrictMode -Version 2.0
@@ -129,6 +136,41 @@ function Test-Ignored {
         if ($Name -eq $ig -or $Name -like ('*:' + $ig)) { return $true }
     }
     return $false
+}
+
+<#
+    Renders a value for the diff: line breaks made visible, long values truncated,
+    and the whole thing withheld when -MaskValues is set.
+#>
+function Format-Value {
+    param([string] $Value)
+
+    if ($null -eq $Value) { return '(null)' }
+    if ($Value -eq '')    { return '(empty)' }
+
+    if ($MaskValues) {
+        return ('({0} char(s), masked)' -f $Value.Length)
+    }
+
+    $v = $Value -replace "`r`n", '<CRLF>' -replace "`n", '<LF>' -replace "`r", '<CR>'
+    if ($v.Length -gt $MaxValueChars) {
+        $v = $v.Substring(0, $MaxValueChars) + ('... (+{0} char(s))' -f ($Value.Length - $MaxValueChars))
+    }
+    return $v
+}
+
+# Index of the first character that differs, so the eye goes straight to it on
+# values that are long and nearly identical.
+function Get-FirstDiff {
+    param([string] $A, [string] $B)
+
+    if ($null -eq $A -or $null -eq $B) { return -1 }
+    $n = [Math]::Min($A.Length, $B.Length)
+    for ($i = 0; $i -lt $n; $i++) {
+        if ($A[$i] -cne $B[$i]) { return $i }
+    }
+    if ($A.Length -ne $B.Length) { return $n }
+    return -1
 }
 
 function Get-Local {
@@ -405,27 +447,81 @@ try {
     if ($blocking -gt 0) { $exitCode = 2 }
 
     if ($findings.Count -gt 0) {
+        Log ""
+        Log "DIFFERENCES   - reference   + candidate"
+        Log ""
+
         $shown = 0
-        foreach ($f in $findings) {
-            if ($shown -ge $MaxReport) {
-                Log ("  ... +{0} more finding(s)" -f ($findings.Count - $MaxReport))
-                break
+        $stop  = $false
+
+        foreach ($grp in ($findings | Group-Object Key)) {
+            if ($stop) { break }
+
+            $keyLabel = if ($grp.Name) { $grp.Name } else { '(no key)' }
+            Log ("  record {0}   [{1} difference(s)]" -f $keyLabel, $grp.Count)
+
+            foreach ($f in $grp.Group) {
+                if ($shown -ge $MaxReport) {
+                    Log ("  ... +{0} more finding(s); raise -MaxReport or use -CsvOut" -f ($findings.Count - $shown))
+                    $stop = $true
+                    break
+                }
+                $shown++
+
+                switch ($f.Kind) {
+
+                    'MISSING_IN_CANDIDATE' {
+                        Log  "    - present in reference only"
+                        Log  "    +"
+                        break
+                    }
+
+                    'EXTRA_IN_CANDIDATE' {
+                        Log  "    -"
+                        Log  "    + present in candidate only"
+                        break
+                    }
+
+                    'ORDER' {
+                        Log  "    element order differs"
+                        Log ("    - {0}" -f (Format-Value -Value $f.Reference))
+                        Log ("    + {0}" -f (Format-Value -Value $f.Candidate))
+                        break
+                    }
+
+                    'ELEMENT_MISSING' {
+                        Log ("    {0}   [ELEMENT_MISSING]" -f (Get-Local $f.Element))
+                        Log ("    - {0}" -f (Format-Value -Value $f.Reference))
+                        Log  "    + (element absent)"
+                        break
+                    }
+
+                    'ELEMENT_EXTRA' {
+                        Log ("    {0}   [ELEMENT_EXTRA]" -f (Get-Local $f.Element))
+                        Log  "    - (element absent)"
+                        Log ("    + {0}" -f (Format-Value -Value $f.Candidate))
+                        break
+                    }
+
+                    default {
+                        # VALUE, WHITESPACE, CONTENT_MISMATCH
+                        $pos = Get-FirstDiff -A $f.Reference -B $f.Candidate
+                        $at  = if ($pos -ge 0) { ("  first differs at char {0}" -f ($pos + 1)) } else { '' }
+                        Log ("    {0}   [{1}]{2}" -f (Get-Local $f.Element), $f.Kind, $at)
+                        Log ("    - {0}" -f (Format-Value -Value $f.Reference))
+                        Log ("    + {0}" -f (Format-Value -Value $f.Candidate))
+                        break
+                    }
+                }
             }
-            $shown++
-            if ($ShowValues) {
-                Log ("  {0} key={1} element={2} ref='{3}' cand='{4}'" -f `
-                     $f.Kind, $f.Key, $f.Element,
-                     ($f.Reference -replace "[`r`n]", '<LF>'), ($f.Candidate -replace "[`r`n]", '<LF>'))
-            }
-            else {
-                Log ("  {0} key={1} element={2}" -f $f.Kind, $f.Key, $f.Element)
-            }
+            Log ""
         }
-        if (-not $ShowValues) { Log "  re-run with -ShowValues to see the values (PII warning)" }
+
+        if ($MaskValues) { Log "  values are masked; omit -MaskValues to see them" }
     }
 
     if ($CsvOut) {
-        $export = if ($ShowValues) { $findings } else { $findings | Select-Object Key, Kind, Element }
+        $export = if ($MaskValues) { $findings | Select-Object Key, Kind, Element } else { $findings }
         $export | Export-Csv -LiteralPath $CsvOut -NoTypeInformation -Encoding UTF8
         Log ("  report={0}" -f $CsvOut)
     }
