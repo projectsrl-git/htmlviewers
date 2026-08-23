@@ -65,6 +65,13 @@
 .PARAMETER MaxValueChars
     Truncate printed values beyond this length. Default 200.
 
+.PARAMETER ProbeContexts
+    Number of distinct hexadecimal contexts reported per file by the byte probe.
+    Default 5.
+
+.PARAMETER NoProbe
+    Skip the byte probe.
+
 .PARAMETER CsvOut
     Write the findings to a CSV.
 
@@ -113,7 +120,11 @@ param(
 
     [int] $MaxReport = 50,
 
-    [int] $MaxValueChars = 200
+    [int] $MaxValueChars = 200,
+
+    [int] $ProbeContexts = 5,
+
+    [switch] $NoProbe
 )
 
 Set-StrictMode -Version 2.0
@@ -178,6 +189,161 @@ function Get-FirstDiff {
     }
     if ($A.Length -ne $B.Length) { return $n }
     return -1
+}
+
+<#
+    Code point at a position, as U+XXXX. One character in hexadecimal carries no
+    readable content, so it is safe to log; the character itself would not be.
+#>
+function Get-CodePointAt {
+    param([string] $Value, [int] $Index)
+
+    if ($null -eq $Value -or $Index -lt 0 -or $Index -ge $Value.Length) { return '(end)' }
+    return ('U+{0:X4}' -f [int][char]$Value[$Index])
+}
+
+<#
+    Reads a file as bytes and reports what it actually contains, independently of any
+    XML parser and of what the prologue claims.
+
+    Speed matters here: a per-byte loop in PowerShell over 500 MB would be half a
+    billion interpreted iterations. Each block is instead mapped 1:1 into a string
+    through ISO-8859-1 - where byte N becomes U+00NN - so the scanning is done by
+    native regular expressions.
+
+    Nothing textual is ever emitted: counts, hexadecimal, and the declared encoding
+    string only.
+#>
+function Test-FileBytes {
+    param(
+        [string] $Path,
+        [int]    $MaxContexts = 5
+    )
+
+    $fi = Get-Item -LiteralPath $Path
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+
+    # A well-formed UTF-8 multibyte sequence, expressed over the 1:1 byte mapping.
+    $reUtf8 = New-Object System.Text.RegularExpressions.Regex `
+        '[\xC2-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF]{2}|[\xF0-\xF4][\x80-\xBF]{3}'
+    $reHigh = New-Object System.Text.RegularExpressions.Regex '[\x80-\xFF]'
+
+    $fs = $null
+    $totalBytes = 0L; $nonAscii = 0L; $utf8Bytes = 0L; $utf8Seqs = 0L
+    $bom = 'none'; $declared = '(not found)'
+    $contexts = New-Object 'System.Collections.Generic.List[string]'
+    $ctxSet   = New-Object 'System.Collections.Generic.HashSet[string]'
+
+    try {
+        $fs = New-Object System.IO.FileStream($fi.FullName,
+                  [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+                  [System.IO.FileShare]::ReadWrite, 1048576)
+
+        $buf = New-Object byte[] 262144
+        $carry = ''
+        $first = $true
+
+        while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+            $totalBytes += $n
+            $block = $latin1.GetString($buf, 0, $n)
+
+            if ($first) {
+                $first = $false
+
+                if ($n -ge 3 -and $buf[0] -eq 0xEF -and $buf[1] -eq 0xBB -and $buf[2] -eq 0xBF) { $bom = 'UTF-8 (EF BB BF)' }
+                elseif ($n -ge 4 -and $buf[0] -eq 0xFF -and $buf[1] -eq 0xFE -and $buf[2] -eq 0x00 -and $buf[3] -eq 0x00) { $bom = 'UTF-32LE' }
+                elseif ($n -ge 2 -and $buf[0] -eq 0xFF -and $buf[1] -eq 0xFE) { $bom = 'UTF-16LE (FF FE)' }
+                elseif ($n -ge 2 -and $buf[0] -eq 0xFE -and $buf[1] -eq 0xFF) { $bom = 'UTF-16BE (FE FF)' }
+
+                $head = $block.Substring(0, [Math]::Min(512, $block.Length))
+                $m = [regex]::Match($head, 'encoding\s*=\s*["'']([^"'']+)["'']', 'IgnoreCase')
+                if ($m.Success) { $declared = $m.Groups[1].Value }
+            }
+
+            # Non-ASCII count is exact: taken on the block alone, no overlap.
+            $nonAscii += $reHigh.Matches($block).Count
+
+            # Sequence matching needs up to 3 bytes of look-back across the boundary.
+            $t = $carry + $block
+            $limit = [Math]::Max(0, $t.Length - 3)
+            foreach ($mm in $reUtf8.Matches($t)) {
+                if (($mm.Index + $mm.Length) -le $limit) {
+                    $utf8Seqs++
+                    $utf8Bytes += $mm.Length
+                }
+            }
+
+            # Distinct hexadecimal contexts around the first non-ASCII byte of a run.
+            if ($contexts.Count -lt $MaxContexts) {
+                foreach ($hm in $reHigh.Matches($block)) {
+                    if ($contexts.Count -ge $MaxContexts) { break }
+                    $i = $hm.Index
+                    # Only the start of a run, not every byte inside it.
+                    if ($i -gt 0 -and [int][char]$block[$i - 1] -ge 0x80) { continue }
+
+                    $from = [Math]::Max(0, $i - 4)
+                    $to   = [Math]::Min($block.Length - 1, $i + 4)
+                    $sb = New-Object System.Text.StringBuilder
+                    for ($j = $from; $j -le $to; $j++) {
+                        if ($j -eq $i) { [void]$sb.Append('[') }
+                        [void]$sb.Append(('{0:X2}' -f [int][char]$block[$j]))
+                        if ($j -eq $i) { [void]$sb.Append(']') }
+                        if ($j -lt $to) { [void]$sb.Append(' ') }
+                    }
+                    $hex = $sb.ToString()
+                    if ($ctxSet.Add($hex)) { $contexts.Add($hex) }
+                }
+            }
+
+            $carry = if ($t.Length -ge 3) { $t.Substring($t.Length - 3) } else { $t }
+        }
+
+        # The tail was never counted: match it now, without a limit.
+        if ($carry.Length -gt 0) {
+            foreach ($mm in $reUtf8.Matches($carry)) { $utf8Seqs++; $utf8Bytes += $mm.Length }
+        }
+    }
+    finally { if ($fs) { $fs.Dispose() } }
+
+    $badHigh = $nonAscii - $utf8Bytes
+    if ($badHigh -lt 0) { $badHigh = 0 }
+
+    $deduced =
+        if ($nonAscii -eq 0) { 'ASCII only (undecidable)' }
+        elseif ($badHigh -eq 0) { 'UTF-8' }
+        elseif ($utf8Bytes -eq 0) { 'single-byte 8-bit (windows-1252 / ISO-8859-1)' }
+        else { 'mixed: both valid UTF-8 sequences and stray high bytes' }
+
+    return [pscustomobject]@{
+        Name = $fi.Name; SizeMB = [Math]::Round($fi.Length / 1MB, 1)
+        Bom = $bom; Declared = $declared; Deduced = $deduced
+        TotalBytes = $totalBytes; NonAscii = $nonAscii
+        Utf8Sequences = $utf8Seqs; Utf8Bytes = $utf8Bytes; StrayHighBytes = $badHigh
+        Contexts = $contexts
+    }
+}
+
+function Write-ProbeReport {
+    param([string] $Label, [psobject] $P)
+
+    Log ("  [{0}] {1}  {2:n1} MB" -f $Label, $P.Name, $P.SizeMB)
+    Log ("    bom={0}" -f $P.Bom)
+    Log ("    declaredEncoding={0}" -f $P.Declared)
+    Log ("    nonAsciiBytes={0:n0} of {1:n0}" -f $P.NonAscii, $P.TotalBytes)
+    Log ("    utf8Sequences={0:n0} coveringBytes={1:n0} strayHighBytes={2:n0}" -f `
+         $P.Utf8Sequences, $P.Utf8Bytes, $P.StrayHighBytes)
+    Log ("    deducedEncoding={0}" -f $P.Deduced)
+
+    $decl = $P.Declared.ToLowerInvariant()
+    $isUtf8Declared = ($decl -like '*utf-8*' -or $decl -like '*utf8*')
+    if ($P.Deduced -eq 'UTF-8' -and -not $isUtf8Declared) {
+        Log ("    MISMATCH the bytes are UTF-8 but the prologue declares '{0}'" -f $P.Declared)
+    }
+    elseif ($P.Deduced -like 'single-byte*' -and $isUtf8Declared) {
+        Log ("    MISMATCH the prologue declares UTF-8 but the bytes are single-byte")
+    }
+
+    foreach ($c in $P.Contexts) { Log ("    context {0}" -f $c) }
 }
 
 function Get-Local {
@@ -340,6 +506,13 @@ try {
     Log ("START key={0} charset={1}" -f $KeyTag, $Encoding)
     if ($ignored.Count -gt 0) { Log ("  ignoring elements: {0}" -f ($ignored -join ', ')) }
 
+    if (-not $NoProbe) {
+        Log "BYTE PROBE (independent of the XML parser)"
+        Write-ProbeReport -Label 'reference' -P (Test-FileBytes -Path $ReferencePath -MaxContexts $ProbeContexts)
+        Write-ProbeReport -Label 'candidate' -P (Test-FileBytes -Path $CandidatePath -MaxContexts $ProbeContexts)
+        Log ""
+    }
+
     Log ("[reference] {0}" -f (Split-Path -Leaf $ReferencePath))
     $ref = Read-IndxRecords -Path $ReferencePath -Enc $enc -Label 'reference'
     Log ("    documents={0} keys={1} noKey={2}" -f $ref.Documents, $ref.Map.Count, $ref.NoKey)
@@ -383,6 +556,9 @@ try {
     # faithful inverse and substitution invents a character that was never there.
     $reclass = 0
     $reclassByElement = @{}
+    # Histogram of the code-point pair at the first difference, over VALUE findings.
+    # A single dominant pair means a single cause.
+    $cpPairs = @{}
     # -----------------------------------------------------------------------
 
     foreach ($k in $common) {
@@ -419,8 +595,14 @@ try {
                 $countWs++
             }
             else {
+                $fd  = Get-FirstDiff -A $va -B $vb
+                $cpA = Get-CodePointAt -Value $va -Index $fd
+                $cpB = Get-CodePointAt -Value $vb -Index $fd
                 $findings.Add([pscustomobject]@{ Key = $k; Kind = 'VALUE'; Element = $n; Reference = $va; Candidate = $vb })
                 $countValue++; $diffHere++
+
+                $pairKey = ('{0} -> {1}' -f $cpA, $cpB)
+                if ($cpPairs.ContainsKey($pairKey)) { $cpPairs[$pairKey]++ } else { $cpPairs[$pairKey] = 1 }
 
                 # Instrumentation: would removal have matched them?
                 if (($va -replace "[`r`n]+", '') -ceq ($vb -replace "[`r`n]+", '')) {
@@ -467,6 +649,14 @@ try {
     Log ("  diffContent={0}" -f $countContent)
     Log ("  diffOrder={0}" -f $countOrder)
     Log ("  diffValueReclassifiableOnRemoval={0}" -f $reclass)
+
+    if ($cpPairs.Count -gt 0) {
+        Log "  codePointPairsAtFirstDifference (reference -> candidate):"
+        foreach ($e in ($cpPairs.GetEnumerator() | Sort-Object Value -Descending)) {
+            Log ("    {0}  x{1}" -f $e.Key, $e.Value)
+        }
+        Log  "  NOTE single characters in hexadecimal only, no values: safe to share"
+    }
     if ($reclass -gt 0) {
         foreach ($e in ($reclassByElement.GetEnumerator() | Sort-Object Value -Descending)) {
             Log ("    reclassifiable {0}={1}" -f $e.Key, $e.Value)
@@ -538,7 +728,12 @@ try {
                     default {
                         # VALUE, WHITESPACE, CONTENT_MISMATCH
                         $pos = Get-FirstDiff -A $f.Reference -B $f.Candidate
-                        $at  = if ($pos -ge 0) { ("  first differs at char {0}" -f ($pos + 1)) } else { '' }
+                        $at  = if ($pos -ge 0) {
+                                   ("  first differs at char {0}:  - {1}   + {2}" -f `
+                                    ($pos + 1),
+                                    (Get-CodePointAt -Value $f.Reference -Index $pos),
+                                    (Get-CodePointAt -Value $f.Candidate -Index $pos))
+                               } else { '' }
                         Log ("    {0}   [{1}]{2}" -f (Get-Local $f.Element), $f.Kind, $at)
                         Log ("    - {0}" -f (Format-Value -Value $f.Reference))
                         Log ("    + {0}" -f (Format-Value -Value $f.Candidate))
