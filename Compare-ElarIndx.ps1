@@ -79,6 +79,13 @@
 .NOTES
     Windows PowerShell 5.1 and PowerShell 7 compatible. Read-only on both files.
     Exit codes: 0 equivalent, 2 differences found, 1 error.
+
+    INSTRUMENTATION (this revision only, no behaviour change): the summary reports
+    diffValueReclassifiableOnRemoval, the count of VALUE findings that would match if
+    line breaks were removed instead of replaced with a space, broken down by element
+    name. It measures how much of the current VALUE noise is the known line-break
+    corruption rather than a real difference. Classification, findings, and exit codes
+    are unchanged by this revision.
 #>
 
 [CmdletBinding()]
@@ -369,6 +376,15 @@ try {
     $identical = 0; $differing = 0
     $countValue = 0; $countWs = 0; $countMissing = 0; $countExtra = 0; $countContent = 0; $countOrder = 0
 
+    # --- instrumentation only, no behaviour change -------------------------
+    # How many of today's VALUE findings would become WHITESPACE if line breaks
+    # were REMOVED rather than replaced with a space. The legacy writer inserted
+    # a break into a value ("P" + LF + "DF" for "PDF"), so removal is the
+    # faithful inverse and substitution invents a character that was never there.
+    $reclass = 0
+    $reclassByElement = @{}
+    # -----------------------------------------------------------------------
+
     foreach ($k in $common) {
         $a = $ref.Map[$k]; $b = $cnd.Map[$k]
         $diffHere = 0
@@ -405,6 +421,14 @@ try {
             else {
                 $findings.Add([pscustomobject]@{ Key = $k; Kind = 'VALUE'; Element = $n; Reference = $va; Candidate = $vb })
                 $countValue++; $diffHere++
+
+                # Instrumentation: would removal have matched them?
+                if (($va -replace "[`r`n]+", '') -ceq ($vb -replace "[`r`n]+", '')) {
+                    $reclass++
+                    $el = Get-Local $n
+                    if ($reclassByElement.ContainsKey($el)) { $reclassByElement[$el]++ }
+                    else { $reclassByElement[$el] = 1 }
+                }
             }
         }
 
@@ -442,6 +466,14 @@ try {
     Log ("  diffElementExtra={0}" -f $countExtra)
     Log ("  diffContent={0}" -f $countContent)
     Log ("  diffOrder={0}" -f $countOrder)
+    Log ("  diffValueReclassifiableOnRemoval={0}" -f $reclass)
+    if ($reclass -gt 0) {
+        foreach ($e in ($reclassByElement.GetEnumerator() | Sort-Object Value -Descending)) {
+            Log ("    reclassifiable {0}={1}" -f $e.Key, $e.Value)
+        }
+        Log  "  NOTE these VALUE findings match once line breaks are removed rather than replaced with a space"
+        Log  "  NOTE element names only, no values: this line is safe to share"
+    }
 
     $blocking = $onlyRef.Count + $onlyCnd.Count + $countValue + $countMissing + $countExtra + $countContent + $countOrder
     if ($blocking -gt 0) { $exitCode = 2 }
