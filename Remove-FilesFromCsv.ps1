@@ -57,7 +57,15 @@
     appear in the log.
 
 .PARAMETER MaxReport
-    Maximum names listed per category. Default 50. Counts stay exact.
+    Maximum names listed per category in the closing summary. Default 50. Counts stay
+    exact.
+
+.PARAMETER SummaryOnly
+    Suppress the per-file lines. Only the periodic progress and the summary are
+    printed, which is what a scheduled run wants once the list is trusted.
+
+.PARAMETER ProgressSeconds
+    Interval between progress lines. Default 5. Set 0 to disable.
 
 .EXAMPLE
     .\Remove-FilesFromCsv.ps1 -Directory G:\ELAR\OUT\CMOD\S210969_CLIAC `
@@ -96,7 +104,11 @@ param(
 
     [switch] $IgnoreMissing,
 
-    [int] $MaxReport = 50
+    [int] $MaxReport = 50,
+
+    [switch] $SummaryOnly,
+
+    [int] $ProgressSeconds = 5
 )
 
 Set-StrictMode -Version 2.0
@@ -129,6 +141,7 @@ try {
     catch { throw "Unknown charset '$Encoding'." }
 
     # --- read the names -----------------------------------------------------
+    $swCsv = [System.Diagnostics.Stopwatch]::StartNew()
     $names = New-Object 'System.Collections.Generic.List[string]'
     $seen  = New-Object 'System.Collections.Generic.HashSet[string]'
     $blank = 0; $dupes = 0
@@ -165,19 +178,36 @@ try {
         finally { $reader.Dispose() }
     }
 
+    $swCsv.Stop()
+
     $action = if ($MoveTo) { 'MOVE' } else { 'DELETE' }
     Log ("START action={0} directory={1}" -f $action, $dir)
     Log ("  csv={0} column={1} names={2} blank={3} duplicates={4}" -f `
          (Split-Path -Leaf $CsvPath), $(if ($Column) { $Column } else { "index $ColumnIndex" }), `
          $names.Count, $blank, $dupes)
     if ($MoveTo) { Log ("  moveTo={0}" -f $moveDir) }
+    Log ("  csvRead={0:n1}s" -f $swCsv.Elapsed.TotalSeconds)
+
+    # --- index the directory once -------------------------------------------
+    # One listing instead of one Test-Path per name. On a network share each stat is
+    # a round trip, so this is the difference between minutes and seconds.
+    $swIdx = [System.Diagnostics.Stopwatch]::StartNew()
+    $index = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($f in [System.IO.Directory]::EnumerateFiles($dir)) {
+        [void]$index.Add([System.IO.Path]::GetFileName($f))
+    }
+    $swIdx.Stop()
+    Log ("  directoryIndexed files={0:n0} in {1:n1}s" -f $index.Count, $swIdx.Elapsed.TotalSeconds)
 
     # --- act ----------------------------------------------------------------
-    $done = 0; $missing = 0; $unsafe = 0; $failed = 0
+    $done = 0; $missing = 0; $unsafe = 0; $failed = 0; $processed = 0
     $listMissing = New-Object 'System.Collections.Generic.List[string]'
     $listUnsafe  = New-Object 'System.Collections.Generic.List[string]'
+    $swAct = [System.Diagnostics.Stopwatch]::StartNew()
+    $nextTick = if ($ProgressSeconds -gt 0) { [double]$ProgressSeconds } else { [double]::MaxValue }
 
     foreach ($n in $names) {
+        $processed++
         $target = $Prefix + $n + $Suffix
 
         # A name, not a path. Anything else is refused rather than interpreted.
@@ -185,11 +215,13 @@ try {
             $target.Contains('..') -or $target.Contains(':')) {
             $unsafe++
             if ($listUnsafe.Count -lt $MaxReport) { [void]$listUnsafe.Add($target) }
+            if (-not $SummaryOnly) { Log ("  SKIP  {0}  (refused: not a bare file name)" -f $target) }
             continue
         }
         if ($target.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
             $unsafe++
             if ($listUnsafe.Count -lt $MaxReport) { [void]$listUnsafe.Add($target) }
+            if (-not $SummaryOnly) { Log ("  SKIP  {0}  (refused: not a bare file name)" -f $target) }
             continue
         }
 
@@ -200,34 +232,49 @@ try {
         if ($parent.TrimEnd('\', '/') -ne $dir) {
             $unsafe++
             if ($listUnsafe.Count -lt $MaxReport) { [void]$listUnsafe.Add($target) }
+            if (-not $SummaryOnly) { Log ("  SKIP  {0}  (refused: not a bare file name)" -f $target) }
             continue
         }
 
-        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        if (-not $index.Contains($target)) {
             $missing++
             if ($listMissing.Count -lt $MaxReport) { [void]$listMissing.Add($target) }
+            if (-not $SummaryOnly) { Log ("  SKIP  {0}  (not found)" -f $target) }
             continue
         }
 
         try {
             if ($MoveTo) {
                 if ($PSCmdlet.ShouldProcess($full, "Move to $moveDir")) {
-                    Move-Item -LiteralPath $full -Destination (Join-Path $moveDir $target) -Force
+                    # The .NET calls avoid the per-item cmdlet overhead, which
+                    # dominates when the list is long.
+                    [System.IO.File]::Move($full, (Join-Path $moveDir $target))
                     $done++
+                    if (-not $SummaryOnly) { Log ("  MOVE  {0}" -f $target) }
                 }
             }
             else {
                 if ($PSCmdlet.ShouldProcess($full, 'Delete')) {
-                    Remove-Item -LiteralPath $full -Force
+                    [System.IO.File]::Delete($full)
                     $done++
+                    if (-not $SummaryOnly) { Log ("  DEL   {0}" -f $target) }
                 }
             }
         }
         catch {
             $failed++
-            Log ("  FAILED {0}: {1}" -f $target, $_.Exception.Message)
+            Log ("  FAIL  {0}: {1}" -f $target, $_.Exception.Message)
+        }
+
+        if ($ProgressSeconds -gt 0 -and $swAct.Elapsed.TotalSeconds -ge $nextTick) {
+            $nextTick = $swAct.Elapsed.TotalSeconds + $ProgressSeconds
+            $rate = if ($swAct.Elapsed.TotalSeconds -gt 0) { $processed / $swAct.Elapsed.TotalSeconds } else { 0 }
+            $eta  = if ($rate -gt 0) { [TimeSpan]::FromSeconds(($names.Count - $processed) / $rate) } else { [TimeSpan]::Zero }
+            Log ("  ... {0:n0}/{1:n0}  done={2:n0} missing={3:n0} refused={4:n0}  {5:n0}/s  ETA {6:mm\:ss}" -f `
+                 $processed, $names.Count, $done, $missing, $unsafe, $rate, $eta)
         }
     }
+    $swAct.Stop()
 
     Log "SUMMARY"
     Log ("  namesRead={0}" -f $names.Count)
@@ -235,6 +282,8 @@ try {
     Log ("  notFound={0}" -f $missing)
     Log ("  refusedUnsafeName={0}" -f $unsafe)
     Log ("  failed={0}" -f $failed)
+    Log ("  elapsed csv={0:n1}s index={1:n1}s action={2:n1}s" -f `
+         $swCsv.Elapsed.TotalSeconds, $swIdx.Elapsed.TotalSeconds, $swAct.Elapsed.TotalSeconds)
 
     if ($listUnsafe.Count -gt 0) {
         Log "  refused (a name must not contain a path separator, '..' or ':'):"
