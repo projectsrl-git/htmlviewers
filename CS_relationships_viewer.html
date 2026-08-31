@@ -315,12 +315,24 @@
 </style>
 </head>
 <body>
-<div id="boot-log" style="position:fixed;top:8px;right:8px;background:#000;color:#0f0;padding:10px;font:11px ui-monospace,Consolas,monospace;z-index:99999;max-width:520px;max-height:60vh;overflow:auto;border:2px solid #0f0;border-radius:4px;line-height:1.5">
+<div id="boot-log" style="display:none;position:fixed;top:8px;right:8px;background:#000;color:#0f0;padding:10px;font:11px ui-monospace,Consolas,monospace;z-index:99999;max-width:520px;max-height:60vh;overflow:auto;border:2px solid #0f0;border-radius:4px;line-height:1.5">
   <b style="color:#ff0">Boot diagnostic</b><br>0. HTML body raggiunto.
 </div>
 <script>
 (function(){
   var el = document.getElementById('boot-log');
+  // Show only if ?debug in the URL. Toggle at any time with Ctrl+Shift+D.
+  function isDebugOn(){
+    var q = (location.search || '') + '' + (location.hash || '');
+    return /[?&#]debug\b/.test(q);
+  }
+  if(isDebugOn()) el.style.display = '';
+  document.addEventListener('keydown', function(e){
+    if(e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')){
+      el.style.display = (el.style.display === 'none') ? '' : 'none';
+      e.preventDefault();
+    }
+  });
   function log(msg, color){
     if(!el) return;
     var c = color || '#0f0';
@@ -328,9 +340,12 @@
   }
   window.__bootLog = log;
   window.addEventListener('error', function(e){
+    // Errors always force the log visible so problems are never silent.
+    if(el) el.style.display = '';
     log('ERROR: ' + (e.message || '?') + ' at line ' + (e.lineno || '?') + ' col ' + (e.colno || '?'), '#f44');
   }, true);
   window.addEventListener('unhandledrejection', function(e){
+    if(el) el.style.display = '';
     log('PROMISE REJ: ' + (e.reason && e.reason.message ? e.reason.message : e.reason), '#f44');
   });
   log('1. Boot script eseguito. window.onerror attivo.');
