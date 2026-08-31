@@ -449,7 +449,8 @@
       </div>
       <div class="group">
         <label>Ricerca</label>
-        <input type="search" id="search-detail" placeholder="Cerca…">
+        <input type="search" id="search-detail" placeholder="Cerca e premi Invio o click su Cerca…">
+        <button class="btn" id="btn-search-detail" title="Avvia la ricerca">🔎 Cerca</button>
       </div>
       <div class="group" style="margin-left:auto">
         <span class="stat"><b id="stat-detail-shown">0</b> di <b id="stat-detail-total">0</b> righe</span>
@@ -501,12 +502,11 @@ const COL_HINTS = {
   TIPO_RELAZIONE:      { label:'Tipo',           type:'string', width:90,  masterHidden:true, render: renderRelType },
   CS_APP:              { label:'CS_APP',         type:'string', width:100, masterHidden:true, render: renderCsApp },
   // Virtual columns — shown only on the master view
-  RELAZIONI:           { label:'# relazioni',    type:'number', width:110, masterOnly:true, render: (v) => v == null ? '' : String(v) },
   AZIONI:              { label:'Azioni',         type:'string', width:180, masterOnly:true, render: renderActions, unsortable:true, unfilterable:true },
 };
 // Columns visible per view
 function colsFor(view){
-  if(view === 'master') return [...COLS.filter(c => !COL_HINTS[c].masterHidden), 'RELAZIONI', 'AZIONI'];
+  if(view === 'master') return [...COLS.filter(c => !COL_HINTS[c].masterHidden), 'AZIONI'];
   return COLS;
 }
 const ROW_H = 28;
@@ -661,7 +661,7 @@ async function loadFile(file){
   }
 }
 
-/* Client aggregation — unique per (CODICE_CLIENTE, NDG), with relation count. */
+/* Client aggregation — unique per (CODICE_CLIENTE, NDG). */
 function deriveMasterRows(){
   const t0 = performance.now();
   const uniq = new Map();
@@ -670,17 +670,13 @@ function deriveMasterRows(){
     const ndg = r.NDG || '';
     if(!ndg) continue;
     const key = cc + '\u0001' + ndg;
-    const cur = uniq.get(key);
-    if(cur){
-      cur.RELAZIONI = cur.RELAZIONI + 1;
-      // Keep the first non-empty NOMINATIVO_CLIENTE we see
+    if(uniq.has(key)){
+      const cur = uniq.get(key);
       if(!cur.NOMINATIVO_CLIENTE && r.NOMINATIVO_CLIENTE) cur.NOMINATIVO_CLIENTE = r.NOMINATIVO_CLIENTE;
     } else {
       uniq.set(key, {
-        CODICE_CLIENTE: cc,
-        NDG: ndg,
-        NOMINATIVO_CLIENTE: r.NOMINATIVO_CLIENTE || '',
-        RELAZIONI: 1
+        CODICE_CLIENTE: cc, NDG: ndg,
+        NOMINATIVO_CLIENTE: r.NOMINATIVO_CLIENTE || ''
       });
     }
   }
@@ -978,7 +974,7 @@ function openLinkView(centerNdg){
 function renderUmlDiagram(opts){
   const { centerNdg, centerDescr, centerEor, parentInfos = [], childInfos = [] } = opts;
   const W = 1200;
-  const ITEM_H = 70;
+  const ITEM_H = 92;
   const PAD_TOP = 24, PAD_BOTTOM = 24;
   const maxRows = Math.max(parentInfos.length, childInfos.length, 1);
   const H = Math.max(200, PAD_TOP + maxRows * ITEM_H + PAD_BOTTOM);
@@ -990,7 +986,7 @@ function renderUmlDiagram(opts){
   const cxL = cx, cxR = cx + cw, cxMid = cx + cw/2, cyMid = cy + ch/2;
 
   // Side badges geometry
-  const sw = 270, sh = 56;
+  const sw = 270, sh = 76;
   const xLeftBadge  = 30;                  // PARENT column
   const xRightBadge = W - sw - 30;         // CHILD column
 
@@ -1033,11 +1029,14 @@ function renderUmlDiagram(opts){
     // Arrow head pointing into the focus
     const ah = 5;
     svg += `<polygon points="${x2},${y2} ${x2-ah*1.6},${y2-ah} ${x2-ah*1.6},${y2+ah}" fill="${linkColor}"/>`;
-    // SOURCE label centered on the curve
-    svg += sourceLabelOnArrow(x1, y1, x2, y2, info.sources, linkColor);
     // Parent badge — clicking opens "Legami del PARENT" of that NDG (i.e. as-parent for that node)
+    const src = sourceForBadge(info.sources);
+    const NL = String.fromCharCode(10);
+    const tipText = esc(info.parentNdg) + '  ' + esc(info.parentDescr || '')
+                  + (src.tooltip ? NL + NL + 'Descrizione del legame:' + NL + esc(src.tooltip) : '');
     svg += `
       <g class="uml-node" data-ndg="${esc(info.parentNdg)}" data-dir="as-parent">
+        <title>${tipText}</title>
         <rect x="${xLeftBadge}" y="${oy}" width="${sw}" height="${sh}" rx="6"
               fill="var(--bg)" stroke="${linkColor}" stroke-width="1.5"/>
         <text x="${xLeftBadge+12}" y="${oy+15}" font-size="9" font-weight="700" letter-spacing="1.5"
@@ -1046,10 +1045,12 @@ function renderUmlDiagram(opts){
               fill="var(--fg)">${esc(info.parentNdg)}</text>
         <text x="${xLeftBadge+12}" y="${oy+49}" font-size="11"
               fill="var(--fg-soft)">${esc(truncate(info.parentDescr || '', 30))}</text>
-        ${info.dt_parent_own ? `<text x="${xLeftBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
-              fill="${linkColor}" text-anchor="end">${esc(info.dt_parent_own)}</text>` : ''}
+        ${src.display ? `<text x="${xLeftBadge+12}" y="${oy+66}" font-size="10" font-weight="600"
+              fill="${linkColor}">${esc(src.display)}</text>` : ''}
+        ${info.dt_inilink ? `<text x="${xLeftBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
+              fill="${linkColor}" text-anchor="end">${esc(info.dt_endlink || info.dt_inilink)}</text>` : ''}
         <text x="${xLeftBadge+sw-12}" y="${oy+49}" font-size="9" letter-spacing="1"
-              fill="var(--fg-mute)" text-anchor="end">${info.caseA ? 'ATTIVO' : 'CHIUSO'}</text>
+              fill="var(--fg-soft)" text-anchor="end">${info.caseA ? 'LEGAME APERTO' : 'LEGAME CHIUSO'}</text>
       </g>`;
   });
 
@@ -1065,10 +1066,13 @@ function renderUmlDiagram(opts){
                   fill="none" stroke="${linkColor}" stroke-width="2" opacity="0.85"/>`;
     const ah = 5;
     svg += `<polygon points="${x2},${y2} ${x2-ah*1.6},${y2-ah} ${x2-ah*1.6},${y2+ah}" fill="${linkColor}"/>`;
-    // SOURCE label centered on the curve
-    svg += sourceLabelOnArrow(x1, y1, x2, y2, info.sources, linkColor);
+    const src = sourceForBadge(info.sources);
+    const NL = String.fromCharCode(10);
+    const tipText = esc(info.childNdg) + '  ' + esc(info.childDescr || '')
+                  + (src.tooltip ? NL + NL + 'Descrizione del legame:' + NL + esc(src.tooltip) : '');
     svg += `
       <g class="uml-node" data-ndg="${esc(info.childNdg)}" data-dir="as-child">
+        <title>${tipText}</title>
         <rect x="${xRightBadge}" y="${oy}" width="${sw}" height="${sh}" rx="6"
               fill="var(--bg)" stroke="${linkColor}" stroke-width="1.5"/>
         <text x="${xRightBadge+12}" y="${oy+15}" font-size="9" font-weight="700" letter-spacing="1.5"
@@ -1077,10 +1081,12 @@ function renderUmlDiagram(opts){
               fill="var(--fg)">${esc(info.childNdg)}</text>
         <text x="${xRightBadge+12}" y="${oy+49}" font-size="11"
               fill="var(--fg-soft)">${esc(truncate(info.childDescr || '', 30))}</text>
-        ${info.dt_child_eor ? `<text x="${xRightBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
-              fill="${linkColor}" text-anchor="end">${esc(info.dt_child_eor)}</text>` : ''}
+        ${src.display ? `<text x="${xRightBadge+12}" y="${oy+66}" font-size="10" font-weight="600"
+              fill="${linkColor}">${esc(src.display)}</text>` : ''}
+        ${info.dt_inilink ? `<text x="${xRightBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
+              fill="${linkColor}" text-anchor="end">${esc(info.dt_endlink || info.dt_inilink)}</text>` : ''}
         <text x="${xRightBadge+sw-12}" y="${oy+49}" font-size="9" letter-spacing="1"
-              fill="var(--fg-mute)" text-anchor="end">${info.caseA ? 'ATTIVO' : 'CHIUSO'}</text>
+              fill="var(--fg-soft)" text-anchor="end">${info.caseA ? 'LEGAME APERTO' : 'LEGAME CHIUSO'}</text>
       </g>`;
   });
 
@@ -1099,27 +1105,23 @@ function truncate(s, n){
    even when the arrow runs underneath. If multiple sources exist, the first one
    is shown plus "+N" when there are more — the "+N" suffix is always preserved
    even when the source name is very long. */
-function sourceLabelOnArrow(x1, y1, x2, y2, sources, color){
-  if(!sources || !sources.length) return '';
-  // "+N" suffix must always stay visible → reserve its space first
+// Returns { display, tooltip } for a badge's SOURCE row.
+// display: short "LINK: <descr>  +N" string for the badge body
+// tooltip: full multi-line listing for the SVG <title> element
+function sourceForBadge(sources){
+  if(!sources || !sources.length) return { display: '', tooltip: '' };
   const suffix = sources.length > 1 ? '  +' + (sources.length - 1) : '';
-  const MAX_TOTAL = 28;
-  const maxSrcLen = Math.max(8, MAX_TOTAL - suffix.length);
+  const MAX_TOTAL = 30;
+  const maxSrcLen = Math.max(8, MAX_TOTAL - suffix.length - 6); // -6 for "LINK: " prefix
   const firstSrc = truncate(sources[0] || '', maxSrcLen);
-  const label = firstSrc + suffix;
-  if(!label) return '';
-  const cx = (x1 + x2) / 2;
-  const cy = (y1 + y2) / 2;
-  // Estimate rectangle width based on label length (rough but works for SVG sans-serif)
-  const w = Math.max(60, label.length * 6.5 + 14);
-  const h = 16;
-  return `
-    <g class="uml-src-label" pointer-events="none">
-      <rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" rx="3"
-            fill="var(--bg)" stroke="${color}" stroke-width="1" opacity="0.95"/>
-      <text x="${cx}" y="${cy + 4}" font-size="10" font-weight="600"
-            fill="${color}" text-anchor="middle">${esc(label)}</text>
-    </g>`;
+  const display = 'LINK: ' + firstSrc + suffix;
+  // Runtime newline (String.fromCharCode) to keep the source free of literal
+  // \n escape patterns that some corporate proxies/AVs mishandle.
+  const NL = String.fromCharCode(10);
+  const tooltip = sources.length === 1
+    ? sources[0]
+    : sources.map((s, i) => (i+1) + '. ' + s).join(NL);
+  return { display, tooltip };
 }
 
 // Legacy wrapper (kept for any external caller)
@@ -1369,7 +1371,7 @@ function buildHead(elId, target){
     r.addEventListener('mousedown', e => startColResize(e, r));
     r.addEventListener('dblclick', e => {
       const col = r.dataset.col;
-      const defaults = {CODICE_CLIENTE:110, NDG:90, NOMINATIVO_CLIENTE:260, PARENT:90, DT_INIZIO_RELAZIONE:120, DT_FINE_RELAZIONE:120, DESCRIZIONE:280, TIPO_RELAZIONE:90, CS_APP:100, RELAZIONI:110, AZIONI:180};
+      const defaults = {CODICE_CLIENTE:110, NDG:90, NOMINATIVO_CLIENTE:260, PARENT:90, DT_INIZIO_RELAZIONE:120, DT_FINE_RELAZIONE:120, DESCRIZIONE:280, TIPO_RELAZIONE:90, CS_APP:100, AZIONI:180};
       const def = defaults[col] || 130;
       setColumnWidth(col, def);
       saveColWidth(col, def);
@@ -1435,9 +1437,27 @@ document.getElementById('btn-detail-export').addEventListener('click', () => {
     : 'eorfull_view';
   exportCsv(S.detail.view, name, 'detail');
 });
-document.getElementById('search-detail').addEventListener('input', debounce(e => {
-  S.detail.search = e.target.value; recomputeDetail();
-}, 250));
+// Detail search: NOT instant (can be up to 2.3M rows). Trigger with Enter key
+// or the 🔎 Cerca button. Clearing the input runs an empty search immediately.
+(function(){
+  const inp = document.getElementById('search-detail');
+  const btn = document.getElementById('btn-search-detail');
+  function runSearch(){
+    const v = inp.value;
+    if(S.detail.search === v) return;
+    S.detail.search = v;
+    recomputeDetail();
+  }
+  inp.addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); runSearch(); }
+  });
+  inp.addEventListener('search', () => {
+    // Native "clear" (x) button in <input type="search"> fires the "search" event
+    // with empty value → refresh immediately in that case.
+    if(inp.value === '') runSearch();
+  });
+  btn.addEventListener('click', runSearch);
+})();
 document.getElementById('btn-detail-reset').addEventListener('click', () => {
   S.detail.search = ''; S.detail.colFilters = {};
   document.getElementById('search-detail').value = '';
