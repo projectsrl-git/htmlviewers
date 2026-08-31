@@ -827,11 +827,19 @@ function buildNdgIndex(){
   S.full.byNdg = m;
 }
 function sortDetail(rows){
-  // NDG ASC, DT_INIZIO_RELAZIONE ASC, then DESCRIZIONE ASC
+  // DT_FINE_RELAZIONE DESC. Empty (= legame ancora aperto) counts as
+  // "most recent" and stays on top. Tie-break: NDG ASC, then DT_INIZIO_RELAZIONE ASC.
   return rows.slice().sort((a,b) => {
-    const c1 = (a.NDG||'').localeCompare(b.NDG||''); if(c1) return c1;
-    const c2 = (a.DT_INIZIO_RELAZIONE||'').localeCompare(b.DT_INIZIO_RELAZIONE||''); if(c2) return c2;
-    return (a.DESCRIZIONE||'').localeCompare(b.DESCRIZIONE||'');
+    const ea = a.DT_FINE_RELAZIONE || '';
+    const eb = b.DT_FINE_RELAZIONE || '';
+    if(ea !== eb){
+      // Empty = "open" = comes first in DESC order
+      if(ea === '') return -1;
+      if(eb === '') return 1;
+      return ea > eb ? -1 : 1;
+    }
+    const c2 = (a.NDG||'').localeCompare(b.NDG||''); if(c2) return c2;
+    return (a.DT_INIZIO_RELAZIONE||'').localeCompare(b.DT_INIZIO_RELAZIONE||'');
   });
 }
 
