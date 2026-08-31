@@ -1382,8 +1382,10 @@ function startColResize(e, handle){
 
 function updateSortIndicators(elId, col, dir){
   document.getElementById(elId).querySelectorAll('.sort-trig').forEach(t => {
-    if(t.dataset.col === col){ t.classList.add('sorted'); t.querySelector('.sort-i').textContent = dir === 'asc' ? '↑' : '↓'; }
-    else { t.classList.remove('sorted'); t.querySelector('.sort-i').textContent = '↕'; }
+    const ind = t.querySelector('.sort-i');
+    if(!ind) return;  // unsortable columns have no indicator
+    if(t.dataset.col === col){ t.classList.add('sorted'); ind.textContent = dir === 'asc' ? '↑' : '↓'; }
+    else { t.classList.remove('sorted'); ind.textContent = '↕'; }
   });
 }
 
