@@ -315,6 +315,27 @@
 </style>
 </head>
 <body>
+<div id="boot-log" style="position:fixed;top:8px;right:8px;background:#000;color:#0f0;padding:10px;font:11px ui-monospace,Consolas,monospace;z-index:99999;max-width:520px;max-height:60vh;overflow:auto;border:2px solid #0f0;border-radius:4px;line-height:1.5">
+  <b style="color:#ff0">Boot diagnostic</b><br>0. HTML body raggiunto.
+</div>
+<script>
+(function(){
+  var el = document.getElementById('boot-log');
+  function log(msg, color){
+    if(!el) return;
+    var c = color || '#0f0';
+    el.innerHTML += '<br><span style="color:' + c + '">' + msg + '</span>';
+  }
+  window.__bootLog = log;
+  window.addEventListener('error', function(e){
+    log('ERROR: ' + (e.message || '?') + ' at line ' + (e.lineno || '?') + ' col ' + (e.colno || '?'), '#f44');
+  }, true);
+  window.addEventListener('unhandledrejection', function(e){
+    log('PROMISE REJ: ' + (e.reason && e.reason.message ? e.reason.message : e.reason), '#f44');
+  });
+  log('1. Boot script eseguito. window.onerror attivo.');
+})();
+</script>
 
 <header>
   <div class="brand">
@@ -603,19 +624,23 @@ drop.addEventListener('drop', async e => {
 });
 
 async function loadFile(file){
+  if(window.__bootLog) window.__bootLog('6. loadFile: inizio ' + file.name + ' (' + (file.size/1024/1024).toFixed(1) + ' MB)');
   setProgress(`Lettura ${file.name}…`);
   setStatus('full', 'Lettura in corso…');
   try {
     S.full.rows = await parseCsvFile(file);
+    if(window.__bootLog) window.__bootLog('7. Papa.parse OK: ' + S.full.rows.length + ' righe');
     S.loaded.full = true;
     setStatus('full', `${S.full.rows.length.toLocaleString('it')} righe`, 'ok');
     setProgress('Calcolo lista clienti unici…');
-    // give the browser a tick to repaint before the heavy reduction
     await new Promise(r => setTimeout(r, 30));
     deriveMasterRows();
+    if(window.__bootLog) window.__bootLog('8. deriveMasterRows OK: ' + S.master.rows.length + ' clienti unici');
     setProgress('');
     initAppOnce();
+    if(window.__bootLog) window.__bootLog('9. initAppOnce OK', '#7f7');
   } catch(err){
+    if(window.__bootLog) window.__bootLog('ERR loadFile: ' + (err && err.message ? err.message : err), '#f44');
     setProgress('');
     setStatus('full', 'Errore: ' + err.message);
   }
@@ -653,17 +678,23 @@ let appInit = false;
 function initAppOnce(){
   if(appInit) return;
   appInit = true;
+  if(window.__bootLog) window.__bootLog('I0. initAppOnce: loadColWidths');
   loadColWidths();
   document.getElementById('view-welcome').classList.remove('on');
+  if(window.__bootLog) window.__bootLog('I1. initAppOnce: buildHead master');
   buildHead('head-master', 'master');
+  if(window.__bootLog) window.__bootLog('I2. initAppOnce: buildHead detail');
   buildHead('head-detail', 'detail');
+  if(window.__bootLog) window.__bootLog('I3. initAppOnce: buildNdgIndex');
   buildNdgIndex();
-  // Sync cut-off input(s) with default value
+  if(window.__bootLog) window.__bootLog('I4. initAppOnce: showView master');
   showView('master');
+  if(window.__bootLog) window.__bootLog('I5. initAppOnce: recomputeMaster');
   recomputeMaster();
   document.getElementById('job-info').textContent =
     `${S.full.rows.length.toLocaleString('it')} righe totali  ·  ${S.master.rows.length.toLocaleString('it')} clienti unici`;
   document.getElementById('btn-reload').style.display = '';
+  if(window.__bootLog) window.__bootLog('I6. initAppOnce: handleHash');
   handleHash();
 }
 
@@ -1394,9 +1425,15 @@ document.getElementById('btn-detail-reset').addEventListener('click', () => {
 });
 
 function recomputeMaster(){
+  if(window.__bootLog) window.__bootLog('R0. recomputeMaster: S.master.rows=' + (S.master.rows && S.master.rows.length));
   filterMaster(); sortMaster();
+  if(window.__bootLog) window.__bootLog('R1. dopo filter+sort: S.master.view=' + (S.master.view && S.master.view.length));
   computeMasterAggs(); renderActiveChips();
   renderMasterGrid(); updateMasterStats();
+  if(window.__bootLog){
+    var b = document.getElementById('body-master');
+    window.__bootLog('R2. render completato. body-master clientHeight=' + (b ? b.clientHeight : 'null'));
+  }
 }
 function filterMaster(){
   const search = S.master.search.toLowerCase();
