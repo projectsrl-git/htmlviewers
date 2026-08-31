@@ -1,0 +1,1647 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CS Relationships Viewer — UBS</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --red:#e60000;
+    --bg:#ffffff;
+    --bg-soft:#fafafa;
+    --bg-hover:#f4f6f9;
+    --bg-active:#fff5d6;
+    --fg:#1a1a1a;
+    --fg-soft:#555555;
+    --fg-mute:#888888;
+    --line:#e4e4e4;
+    --head-bg:#1a1a1a;
+    --head-fg:#ffffff;
+    --head-line:#2a2a2a;
+    --link-bg:#fff7e0;  --link-bd:#c97a00;
+    --direct-bg:#e8f5ec; --direct-bd:#1a8c3a;
+    --na-bg:#f0f0f0;     --na-bd:#888;
+    --chip-bg:#fff7e0;   --chip-bd:#e6cd66;
+    --chip-fg:#5a4500;
+  }
+  html[data-theme="dark"]{
+    --red:#ff5252;
+    --bg:#0e1116;
+    --bg-soft:#161a21;
+    --bg-hover:#1e242e;
+    --bg-active:#3a3220;
+    --fg:#e6e6e6;
+    --fg-soft:#a0a8b5;
+    --fg-mute:#6f7886;
+    --line:#262c36;
+    --head-bg:#000000;
+    --head-fg:#e6e6e6;
+    --head-line:#1a1f27;
+    --link-bg:#3a2f0e;  --link-bd:#d39e44;
+    --direct-bg:#0e2d1a; --direct-bd:#4cc77f;
+    --na-bg:#262c36;     --na-bd:#7f8896;
+    --chip-bg:#2a2412;   --chip-bd:#5a4a1e;
+    --chip-fg:#e4cd84;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%; overflow:hidden}
+  body{
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background:var(--bg); color:var(--fg); font-size:13px;
+    display:flex; flex-direction:column;
+    transition: background .25s, color .25s;
+  }
+  header{
+    background:var(--bg); border-bottom:1px solid var(--line);
+    padding:14px 20px; display:flex; align-items:center; gap:20px; flex-shrink:0;
+  }
+  .brand{display:flex; align-items:baseline; gap:14px}
+  .brand .logo{font-weight:700; color:var(--red); font-size:18px; letter-spacing:2px}
+  .brand h1{font-size:14px; font-weight:600; color:var(--fg)}
+  .brand .sub{font-size:11px; color:var(--fg-mute); font-style:italic}
+  .right-tools{margin-left:auto; display:flex; align-items:center; gap:10px}
+  .btn{
+    border:1px solid var(--line); background:var(--bg); color:var(--fg);
+    padding:7px 14px; font-size:12px; font-weight:500; cursor:pointer; border-radius:3px;
+    font-family:inherit; transition:all .15s;
+  }
+  .btn:hover{background:var(--bg-hover); border-color:var(--fg-mute)}
+  .btn[disabled]{opacity:.4; cursor:not-allowed}
+  .btn-mini{
+    padding:3px 8px; font-size:10px; font-weight:600; letter-spacing:.5px;
+    border-radius:3px; border:1px solid var(--line); background:var(--bg); color:var(--fg-soft);
+    cursor:pointer; font-family:inherit;
+  }
+  .btn-mini:hover{background:var(--red); color:#fff; border-color:var(--red)}
+  input[type=search], input[type=text]{
+    border:1px solid var(--line); padding:6px 10px; font-size:12px;
+    border-radius:3px; font-family:inherit; background:var(--bg); color:var(--fg);
+  }
+  input[type=search]:focus, input[type=text]:focus{ outline:none; border-color:var(--red) }
+  input[type=file]{display:none}
+  .theme-toggle{display:inline-flex; border:1px solid var(--line); border-radius:3px; overflow:hidden}
+  .theme-toggle button{
+    border:none; background:var(--bg); color:var(--fg-soft);
+    padding:6px 10px; cursor:pointer; font-size:11px; font-family:inherit;
+    border-right:1px solid var(--line);
+  }
+  .theme-toggle button:last-child{border-right:none}
+  .theme-toggle button.active{background:var(--head-bg); color:var(--head-fg)}
+  .theme-toggle button:hover:not(.active){background:var(--bg-hover)}
+
+  main{flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; position:relative}
+
+  .welcome{
+    flex:1; display:none; flex-direction:column; align-items:center; justify-content:center;
+    padding:40px; gap:24px; background:var(--bg-soft);
+  }
+  .welcome.on{display:flex}
+  .welcome h2{font-size:22px; font-weight:300}
+  .welcome h2 b{color:var(--red); font-weight:600}
+  .welcome p{color:var(--fg-soft); max-width:620px; text-align:center; line-height:1.6}
+  .drop{
+    border:2px dashed var(--line); padding:30px 50px; border-radius:6px;
+    background:var(--bg); transition:all .2s;
+    display:flex; flex-direction:column; gap:14px; align-items:center; min-width:560px;
+  }
+  .drop.over{border-color:var(--red); background:var(--bg-soft)}
+  .file-row{
+    display:flex; align-items:center; justify-content:space-between; gap:20px;
+    width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:4px;
+    background:var(--bg-soft);
+  }
+  .file-row .name{font-family:"SF Mono", Consolas, monospace; font-size:12px; color:var(--fg)}
+  .file-row .status{font-size:11px; color:var(--fg-mute)}
+  .file-row .status.ok{color:var(--direct-bd); font-weight:600}
+  .help{font-size:11px; color:var(--fg-mute); margin-top:8px; text-align:center}
+  .progress{display:none; align-items:center; gap:12px; font-size:12px; color:var(--fg-soft)}
+  .progress.on{display:flex}
+  .spinner{width:14px; height:14px; border:2px solid var(--line); border-top-color:var(--red); border-radius:50%; animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .view{display:none; flex:1; min-height:0; flex-direction:column}
+  .view.on{display:flex}
+
+  .toolbar{
+    background:var(--bg); border-bottom:1px solid var(--line);
+    padding:10px 20px; display:flex; align-items:center; gap:16px;
+    flex-shrink:0; flex-wrap:wrap;
+  }
+  .toolbar .group{display:flex; align-items:center; gap:8px}
+  .toolbar label{font-size:11px; color:var(--fg-mute); font-weight:600; letter-spacing:1px; text-transform:uppercase}
+  .toolbar input[type=search]{width:240px}
+  .toolbar .stat{font-size:11px; color:var(--fg-soft)}
+  .toolbar .stat b{color:var(--fg); font-weight:600}
+  .breadcrumb{display:flex; align-items:center; gap:10px; font-size:12px}
+  .breadcrumb .back{
+    display:inline-flex; align-items:center; gap:6px;
+    color:var(--fg-soft); text-decoration:none;
+    padding:5px 12px; border-radius:3px; border:1px solid var(--line);
+    background:var(--bg); cursor:pointer; font-family:inherit;
+  }
+  .breadcrumb .back:hover{background:var(--bg-hover); border-color:var(--red); color:var(--fg)}
+  .breadcrumb .sep{color:var(--fg-mute)}
+  .breadcrumb .ndg{
+    font-family:"SF Mono", Consolas, monospace; font-weight:600; color:var(--red);
+    background:var(--bg-active); padding:3px 10px; border-radius:3px;
+  }
+
+  .metrics{
+    display:grid; grid-template-columns:1.2fr 1fr 1.8fr;
+    gap:1px; background:var(--line); border-bottom:1px solid var(--line);
+    max-height:240px; flex-shrink:0;
+  }
+  .panel{background:var(--bg); padding:14px 16px; overflow:hidden; display:flex; flex-direction:column; min-height:0}
+  .panel h3{font-size:10px; font-weight:600; color:var(--fg-mute); letter-spacing:2px; text-transform:uppercase; margin-bottom:10px}
+  .panel-body{flex:1; min-height:0; overflow:auto}
+  .panel-body::-webkit-scrollbar{width:6px; height:6px}
+  .panel-body::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
+  .kv{display:flex; align-items:center; padding:4px 6px; border-radius:3px; font-size:12px; cursor:pointer; margin-bottom:1px}
+  .kv:hover{background:var(--bg-hover)}
+  .kv.active{background:var(--red); color:#fff}
+  .kv > div{flex:1; min-width:0}
+  .kv-row{display:flex; justify-content:space-between; gap:8px}
+  .kv-k{font-weight:500}
+  .kv-c{font-variant-numeric:tabular-nums; color:var(--fg-soft); font-size:11px}
+  .kv.active .kv-c{color:#fff}
+  .bar{height:3px; background:var(--bg-soft); margin-top:3px; border-radius:2px; overflow:hidden}
+  .bar > div{height:100%; background:var(--red); transition:width .25s}
+  .kv.active .bar{background:rgba(255,255,255,.2)}
+  .kv.active .bar > div{background:#fff}
+  .chart-wrap{position:relative; flex:1; min-height:0}
+  canvas{max-width:100%; max-height:100%}
+
+  .active-filters{
+    background:var(--chip-bg); border-bottom:1px solid var(--chip-bd);
+    padding:8px 20px; display:none; gap:10px; align-items:center;
+    font-size:11px; color:var(--chip-fg); flex-shrink:0; flex-wrap:wrap;
+  }
+  .active-filters.on{display:flex}
+  .chip{
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--bg); border:1px solid var(--chip-bd); padding:3px 8px;
+    border-radius:12px; font-size:11px; color:var(--fg);
+  }
+  .chip b{color:var(--fg)}
+  .chip .x{cursor:pointer; color:var(--fg-mute); font-weight:bold; padding:0 2px}
+  .chip .x:hover{color:var(--red)}
+
+  .grid-wrap{flex:1; min-height:0; display:flex; flex-direction:column; background:var(--bg); overflow:hidden}
+  .grid-head{display:flex; background:var(--head-bg); color:var(--head-fg); font-size:11px; font-weight:600; letter-spacing:1px; flex-shrink:0; user-select:none; overflow-x:auto; overflow-y:hidden; scrollbar-width:none}
+  .grid-head::-webkit-scrollbar{display:none}
+  .grid-head .cell{padding:10px 12px; border-right:1px solid var(--head-line); display:flex; flex-direction:column; gap:6px; position:relative}
+  .grid-head .cell:last-child{border-right:none}
+  .grid-head .resizer{
+    position:absolute; top:0; right:-3px; width:6px; height:100%;
+    cursor:col-resize; z-index:5; background:transparent;
+  }
+  .grid-head .resizer:hover, .grid-head .resizer.dragging{
+    background:var(--red); opacity:.6;
+  }
+  body.col-resizing{cursor:col-resize !important}
+  body.col-resizing *{cursor:col-resize !important; user-select:none !important}
+  .grid-head .sort-trig{display:flex; justify-content:space-between; align-items:center; cursor:pointer; gap:6px}
+  .grid-head .sort-trig:hover{color:#ffd}
+  .grid-head .sort-i{font-size:9px; opacity:.5}
+  .grid-head .sort-trig.sorted .sort-i{opacity:1; color:#ffaaaa}
+  .col-filter{
+    border:none; background:rgba(255,255,255,.1); color:var(--head-fg);
+    padding:3px 6px; font-size:11px; border-radius:2px; font-family:inherit; width:100%;
+  }
+  .col-filter::placeholder{color:rgba(255,255,255,.4)}
+  .col-filter:focus{outline:none; background:rgba(255,255,255,.2)}
+  .col-filter-range{display:flex; gap:3px; width:100%}
+  .col-filter-range > input{
+    flex:1; min-width:0;
+    border:none; background:rgba(255,255,255,.1); color:var(--head-fg);
+    padding:3px 5px; font-size:10px; border-radius:2px;
+    font-family:inherit; font-variant-numeric:tabular-nums;
+  }
+  .col-filter-range > input::placeholder{color:rgba(255,255,255,.4)}
+  .col-filter-range > input:focus{outline:none; background:rgba(255,255,255,.2)}
+
+  .grid-body{flex:1; overflow:auto; position:relative}
+  .grid-body::-webkit-scrollbar{width:10px; height:10px}
+  .grid-body::-webkit-scrollbar-thumb{background:var(--line); border-radius:5px}
+  .grid-body::-webkit-scrollbar-thumb:hover{background:var(--fg-mute)}
+  .virtual-spacer{position:absolute; left:0; top:0; width:1px; pointer-events:none}
+  .virtual-row{
+    position:absolute; left:0; right:0; display:flex; border-bottom:1px solid var(--line);
+    font-size:12px; font-variant-numeric:tabular-nums;
+    background:var(--bg); cursor:pointer;
+  }
+  .virtual-row:nth-child(even){background:var(--bg-soft)}
+  .virtual-row:hover{background:var(--bg-active) !important}
+  .virtual-row .cell{padding:6px 12px; border-right:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .virtual-row .cell:last-child{border-right:none}
+  .view-detail .virtual-row{cursor:default}
+
+  .pill{display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:600; letter-spacing:.5px}
+  .pill-link{background:var(--link-bg); color:var(--link-bd); border:1px solid var(--link-bd)}
+  .pill-direct{background:var(--direct-bg); color:var(--direct-bd); border:1px solid var(--direct-bd)}
+  .pill-na{background:var(--na-bg); color:var(--na-bd); border:1px solid var(--na-bd)}
+  .pill-src{display:inline-block; padding:1px 6px; border-radius:2px; background:var(--bg-soft); border:1px solid var(--line); font-size:10px; color:var(--fg-soft); font-weight:500}
+  .virtual-row.master-row{background:var(--bg-active) !important; box-shadow:inset 4px 0 0 var(--red)}
+
+  /* ---------- Parent view (link diagrams) ---------- */
+  .parent-wrap{flex:1; min-height:0; overflow:auto; padding:14px 20px; background:var(--bg-soft)}
+  .parent-wrap::-webkit-scrollbar{width:10px; height:10px}
+  .parent-wrap::-webkit-scrollbar-thumb{background:var(--line); border-radius:5px}
+  .parent-meta{
+    background:var(--bg); border:1px solid var(--line); border-radius:4px;
+    padding:12px 16px; margin-bottom:14px; font-size:12px;
+  }
+  .parent-meta .lbl{color:var(--fg-mute); font-size:10px; text-transform:uppercase; letter-spacing:1px}
+  .parent-meta .val{font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums}
+  .parent-meta .row{display:flex; gap:24px; align-items:baseline; flex-wrap:wrap}
+  .child-card{
+    background:var(--bg); border:1px solid var(--line); border-radius:4px;
+    margin-bottom:12px; padding:12px 16px; overflow:hidden;
+  }
+  .child-card .head{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:10px}
+  .child-card .head .ndg{font-family:"SF Mono",Consolas,monospace; font-weight:600; color:var(--fg)}
+  .child-card .head .descr{color:var(--fg-soft); font-size:12px}
+  .child-card .head .badge-case{
+    font-size:10px; padding:2px 8px; border-radius:10px; font-weight:600; letter-spacing:.5px;
+  }
+  .child-card .head .badge-case.A{background:var(--direct-bg); color:var(--direct-bd); border:1px solid var(--direct-bd)}
+  .child-card .head .badge-case.B{background:var(--link-bg); color:var(--link-bd); border:1px solid var(--link-bd)}
+  .child-card .head .link-dates{
+    margin-left:auto;
+    font-size:11px; font-variant-numeric:tabular-nums; font-weight:600;
+    padding:3px 10px; border-radius:3px;
+    background:var(--bg-soft); border:1px solid var(--line);
+  }
+  .child-card .head .link-dates.A{color:var(--red); border-color:var(--red)}
+  .child-card .head .link-dates.B{color:var(--link-bd); border-color:var(--link-bd)}
+  .child-card .eor-formula{
+    font-size:11px; color:var(--fg-soft); font-variant-numeric:tabular-nums;
+    margin-top:10px; padding-top:8px; border-top:1px solid var(--line);
+  }
+  .child-card .eor-formula b{color:var(--fg)}
+  .child-card svg{width:100%; height:auto; display:block}
+  .parent-empty{
+    text-align:center; padding:40px; color:var(--fg-soft); font-size:13px;
+  }
+  .parent-empty b{color:var(--fg); display:block; margin-bottom:4px; font-size:14px}
+  /* PARENT and NDG cells in detail grid → clickable affordance */
+  #view-detail .virtual-row .cell[data-col="PARENT"]:not(:empty),
+  #view-detail .virtual-row .cell[data-col="NDG"]{
+    cursor:pointer; color:var(--red); text-decoration:underline; text-underline-offset:2px;
+  }
+  #view-detail .virtual-row .cell[data-col="PARENT"]:not(:empty):hover,
+  #view-detail .virtual-row .cell[data-col="NDG"]:hover{
+    background:var(--bg-active);
+  }
+  /* UML diagram (PARENT ↔ CHILDren) */
+  .uml-wrap{
+    background:var(--bg); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin-bottom:14px; overflow:auto;
+  }
+  .uml-wrap svg{display:block; max-width:100%; height:auto}
+  .uml-wrap .uml-node{cursor:pointer}
+  .uml-wrap .uml-node:hover rect{filter:brightness(1.08)}
+  .uml-wrap .uml-node:hover text.uml-ndg{text-decoration:underline}
+  .link-section-header{
+    font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;
+    color:var(--fg-soft); margin:20px 4px 10px;
+    padding-bottom:6px; border-bottom:1px solid var(--line);
+  }
+  footer{background:var(--bg-soft); border-top:1px solid var(--line); padding:6px 20px; font-size:10px; color:var(--fg-mute); flex-shrink:0; display:flex; justify-content:space-between}
+  .empty{padding:60px; text-align:center; color:var(--fg-soft); font-size:13px}
+  .empty b{color:var(--fg); display:block; margin-bottom:4px; font-size:14px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">UBS</span>
+    <h1 id="page-title">CS Relationships — Clienti</h1>
+    <span class="sub" id="job-info"></span>
+  </div>
+  <div class="right-tools">
+    <span class="progress" id="progress"><span class="spinner"></span><span id="prog-text">…</span></span>
+    <button class="btn" id="btn-reload" style="display:none" title="Carica un file diverso, scartando i dati attuali">📁 Carica nuovo file…</button>
+    <div class="theme-toggle" id="theme-toggle" title="Tema">
+      <button data-theme="auto">Auto</button>
+      <button data-theme="light">☀</button>
+      <button data-theme="dark">☾</button>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <div class="welcome view" id="view-welcome">
+    <h2>CS Relationships Viewer<span style="color:var(--fg-mute); font-weight:300">  ·  esplora clienti e relazioni</span></h2>
+
+    <div class="drop" id="drop-zone">
+
+      <div style="font-size:14px; line-height:1.6; color:var(--fg); text-align:center; margin-bottom:4px">
+        Carica il file
+        <span style="font-family:'SF Mono', Consolas, monospace; background:var(--bg-soft); padding:2px 8px; border-radius:3px; font-size:12px">cs_client_relationships.csv</span>
+        con tutte le relazioni di tutti i clienti
+      </div>
+
+      <div style="display:flex; align-items:center; gap:14px; margin:8px 0">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:6px; flex:1">
+          <div style="font-size:36px">📥</div>
+          <div style="font-size:13px; font-weight:600; color:var(--fg)">Trascinalo qui</div>
+          <div style="font-size:11px; color:var(--fg-mute); text-align:center">apri la cartella dove è salvato<br>e trascinalo in questa finestra</div>
+        </div>
+        <div style="font-size:13px; color:var(--fg-mute); font-weight:600">oppure</div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:6px; flex:1">
+          <div style="font-size:36px">📂</div>
+          <div style="font-size:13px; font-weight:600; color:var(--fg)">Selezionalo manualmente</div>
+          <div style="font-size:11px; color:var(--fg-mute); text-align:center">usa il pulsante qui sotto<br>per scegliere il file</div>
+        </div>
+      </div>
+
+      <div style="width:100%; border-top:1px solid var(--line); margin-top:4px; padding-top:14px">
+        <div class="file-row">
+          <span style="display:flex; flex-direction:column; gap:2px">
+            <span class="name">cs_client_relationships.csv</span>
+            <span style="font-size:10px; color:var(--fg-mute)">tutte le relazioni per ogni cliente</span>
+          </span>
+          <span style="display:flex; gap:10px; align-items:center">
+            <span class="status" id="status-full">— in attesa —</span>
+            <label class="btn" for="file-full">Scegli file</label>
+            <input type="file" id="file-full" accept=".csv,.txt,.tsv">
+          </span>
+        </div>
+      </div>
+
+      <div class="help" style="margin-top:6px">Il file non esce dal tuo computer: viene letto dal browser e non viene inviato da nessuna parte.</div>
+    </div>
+  </div>
+
+  <div class="view view-master" id="view-master">
+    <div class="toolbar">
+      <div class="group">
+        <label>Ricerca</label>
+        <input type="search" id="search-master" placeholder="Cerca in tutte le colonne…">
+      </div>
+      <div class="group" style="margin-left:auto">
+        <span class="stat"><b id="stat-master-shown">0</b> di <b id="stat-master-total">0</b> clienti</span>
+        <button class="btn" id="btn-master-reset">Azzera filtri</button>
+        <button class="btn" id="btn-master-export">Esporta vista</button>
+        <button class="btn" id="btn-open-full" title="Esplora liberamente tutte le relazioni">🔍 Esplora Full</button>
+      </div>
+    </div>
+    <div class="active-filters" id="active-filters-master"></div>
+    <div class="grid-wrap">
+      <div class="grid-head" id="head-master"></div>
+      <div class="grid-body" id="body-master">
+        <div class="virtual-spacer" id="spacer-master"></div>
+        <div id="viewport-master"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view view-detail" id="view-detail">
+    <div class="toolbar">
+      <div class="breadcrumb">
+        <button class="back" id="btn-back">← Master</button>
+        <span class="sep">/</span>
+        <span>Esplora <code style="background:var(--bg-soft); padding:2px 6px; border-radius:3px; font-size:11px">tutte le relazioni</code></span>
+        <span class="sep" id="detail-origin-sep">·</span>
+        <span style="color:var(--fg-mute); font-size:11px" id="detail-origin-lbl">drilldown da</span>
+        <span class="ndg" id="detail-ndg">—</span>
+      </div>
+      <div class="group">
+        <label>Ricerca</label>
+        <input type="search" id="search-detail" placeholder="Cerca…">
+      </div>
+      <div class="group" style="margin-left:auto">
+        <span class="stat"><b id="stat-detail-shown">0</b> di <b id="stat-detail-total">0</b> righe</span>
+        <button class="btn" id="btn-detail-reset">Azzera filtri</button>
+        <button class="btn" id="btn-detail-export">Esporta</button>
+      </div>
+    </div>
+    <div class="active-filters" id="active-filters-detail"></div>
+    <div class="grid-wrap">
+      <div class="grid-head" id="head-detail"></div>
+      <div class="grid-body" id="body-detail">
+        <div class="virtual-spacer" id="spacer-detail"></div>
+        <div id="viewport-detail"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-parent">
+    <div class="toolbar">
+      <div class="group">
+        <button class="btn" id="btn-parent-back" title="Torna alla vista precedente">← Indietro</button>
+        <button class="btn" id="btn-link-master" title="Vai al Master filtrato sul NDG corrente">Master</button>
+        <button class="btn" id="btn-link-detail" title="Vai al Dettaglio delle relazioni del NDG corrente">Dettaglio</button>
+      </div>
+      <div class="group" style="margin-left:auto">
+        <span class="stat" id="parent-stat"></span>
+      </div>
+    </div>
+    <div class="parent-wrap" id="parent-wrap"></div>
+  </div>
+
+</main>
+
+<footer>
+  <span>CS Relationships Viewer  ·  i dati restano sul tuo PC, mai trasmessi  ·  UBS</span>
+  <span id="render-stats"></span>
+</footer>
+
+<script>
+const COLS = ["CODICE_CLIENTE","NDG","NOMINATIVO_CLIENTE","PARENT","DT_INIZIO_RELAZIONE","DT_FINE_RELAZIONE","DESCRIZIONE","TIPO_RELAZIONE","CS_APP"];
+const COL_HINTS = {
+  CODICE_CLIENTE:      { label:'Cod. Cliente',   type:'string', width:110 },
+  NDG:                 { label:'NDG',            type:'string', width:90  },
+  NOMINATIVO_CLIENTE:  { label:'Nominativo',     type:'string', width:260 },
+  PARENT:              { label:'Parent',         type:'string', width:90,  masterHidden:true },
+  DT_INIZIO_RELAZIONE: { label:'Inizio relaz.', type:'date',   width:120, masterHidden:true },
+  DT_FINE_RELAZIONE:   { label:'Fine relaz.',   type:'date',   width:120, masterHidden:true },
+  DESCRIZIONE:         { label:'Descrizione',    type:'string', width:280, masterHidden:true },
+  TIPO_RELAZIONE:      { label:'Tipo',           type:'string', width:90,  masterHidden:true, render: renderRelType },
+  CS_APP:              { label:'CS_APP',         type:'string', width:100, masterHidden:true, render: renderCsApp },
+  // Virtual columns — shown only on the master view
+  RELAZIONI:           { label:'# relazioni',    type:'number', width:110, masterOnly:true, render: (v) => v == null ? '' : String(v) },
+  AZIONI:              { label:'Azioni',         type:'string', width:180, masterOnly:true, render: renderActions, unsortable:true, unfilterable:true },
+};
+// Columns visible per view
+function colsFor(view){
+  if(view === 'master') return [...COLS.filter(c => !COL_HINTS[c].masterHidden), 'RELAZIONI', 'AZIONI'];
+  return COLS;
+}
+const ROW_H = 28;
+
+const S = {
+  master:{ rows:[], view:[], search:'', colFilters:{}, drilldown:{}, sortCol:'NDG', sortDir:'asc' },
+  full:  { rows:[], byNdg:null },
+  detail:{ originNdg:null, highlightDt:null, view:[], search:'', colFilters:{} },
+  loaded:{ full:false },
+};
+
+/* ---------- THEME ---------- */
+function applyTheme(mode){
+  const root = document.documentElement;
+  if(mode === 'auto'){
+    root.setAttribute('data-theme', window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  } else {
+    root.setAttribute('data-theme', mode);
+  }
+  document.querySelectorAll('.theme-toggle button').forEach(b => b.classList.toggle('active', b.dataset.theme === mode));
+}
+document.querySelectorAll('.theme-toggle button').forEach(b => b.addEventListener('click', () => {
+  const m = b.dataset.theme; localStorage.setItem('cs-rel-theme', m); applyTheme(m);
+}));
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if((localStorage.getItem('cs-rel-theme') || 'auto') === 'auto') applyTheme('auto');
+});
+applyTheme(localStorage.getItem('cs-rel-theme') || 'auto');
+
+/* ---------- HELPERS ---------- */
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function renderRelType(v){
+  if(!v) return '';
+  const cls = v==='LINK' ? 'pill-link' : v==='DIRECT' ? 'pill-direct' : 'pill-na';
+  return `<span class="pill ${cls}">${esc(v)}</span>`;
+}
+function renderCsApp(v){
+  if(!v) return '';
+  return `<span class="pill-src">${esc(v)}</span>`;
+}
+// Two small buttons for the master ACTIONS column. Clicks are handled by
+// event delegation on the viewport (see the click listener setup near
+// renderVisibleMaster).
+function renderActions(_v){
+  return '<button class="btn btn-mini" data-act="details" title="Vedi tutte le relazioni di questo cliente">DETAILS</button>'
+       + '<button class="btn btn-mini" data-act="link" title="Vedi PARENT e CHILD di questo cliente" style="margin-left:6px">LINK</button>';
+}
+function debounce(fn, ms){ let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+/* Date filter helpers — accept YYYY / YYYY-MM / YYYY-MM-DD.
+   "from" side: expand to the FIRST day of the period.
+   "to"   side: expand to the LAST  day of the period.
+   Returns null for empty / unrecognized strings. */
+function expandDateFrom(s){
+  s = (s || '').trim();
+  if(!s) return null;
+  if(/^\d{4}$/.test(s)) return s + '-01-01';
+  if(/^\d{4}-\d{1,2}$/.test(s)){
+    const [y,m] = s.split('-'); return y + '-' + m.padStart(2,'0') + '-01';
+  }
+  if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){
+    const [y,m,d] = s.split('-');
+    return y + '-' + m.padStart(2,'0') + '-' + d.padStart(2,'0');
+  }
+  return s; // pass through; will simply not match anything
+}
+function expandDateTo(s){
+  s = (s || '').trim();
+  if(!s) return null;
+  if(/^\d{4}$/.test(s)) return s + '-12-31';
+  if(/^\d{4}-\d{1,2}$/.test(s)){
+    const [y,m] = s.split('-');
+    const mm = m.padStart(2,'0');
+    // last day of month — JS Date roll-over trick
+    const last = new Date(Number(y), Number(m), 0).getDate();
+    return y + '-' + mm + '-' + String(last).padStart(2,'0');
+  }
+  if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){
+    const [y,m,d] = s.split('-');
+    return y + '-' + m.padStart(2,'0') + '-' + d.padStart(2,'0');
+  }
+  return s;
+}
+function formatDateRange(v){
+  if(v && typeof v === 'object'){
+    return (v.from || '…') + '  →  ' + (v.to || '…');
+  }
+  return String(v);
+}
+
+/* ---------- LOADING ---------- */
+function setProgress(text){
+  const p = document.getElementById('progress');
+  if(text){ p.classList.add('on'); document.getElementById('prog-text').textContent = text; }
+  else p.classList.remove('on');
+}
+function setStatus(which, text, cls){
+  const el = document.getElementById('status-' + which);
+  el.textContent = text;
+  el.classList.remove('ok','err');
+  if(cls) el.classList.add(cls);
+}
+function parseCsvFile(file){
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    Papa.parse(file, {
+      header:true, skipEmptyLines:true, delimiter:';',
+      chunk: r => { for(const x of r.data) rows.push(x); },
+      complete: () => resolve(rows),
+      error: reject,
+    });
+  });
+}
+
+/* ---------- FILE LOADING ---------- */
+document.getElementById('file-full').addEventListener('change', async e => {
+  if(!e.target.files[0]) return;
+  await loadFile(e.target.files[0]);
+});
+
+const drop = document.getElementById('drop-zone');
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', async e => {
+  for(const f of e.dataTransfer.files){
+    await loadFile(f);
+    break;
+  }
+});
+
+async function loadFile(file){
+  setProgress(`Lettura ${file.name}…`);
+  setStatus('full', 'Lettura in corso…');
+  try {
+    S.full.rows = await parseCsvFile(file);
+    S.loaded.full = true;
+    setStatus('full', `${S.full.rows.length.toLocaleString('it')} righe`, 'ok');
+    setProgress('Calcolo lista clienti unici…');
+    // give the browser a tick to repaint before the heavy reduction
+    await new Promise(r => setTimeout(r, 30));
+    deriveMasterRows();
+    setProgress('');
+    initAppOnce();
+  } catch(err){
+    setProgress('');
+    setStatus('full', 'Errore: ' + err.message);
+  }
+}
+
+/* Client aggregation — unique per (CODICE_CLIENTE, NDG), with relation count. */
+function deriveMasterRows(){
+  const t0 = performance.now();
+  const uniq = new Map();
+  for(const r of S.full.rows){
+    const cc = r.CODICE_CLIENTE || '';
+    const ndg = r.NDG || '';
+    if(!ndg) continue;
+    const key = cc + '\u0001' + ndg;
+    const cur = uniq.get(key);
+    if(cur){
+      cur.RELAZIONI = cur.RELAZIONI + 1;
+      // Keep the first non-empty NOMINATIVO_CLIENTE we see
+      if(!cur.NOMINATIVO_CLIENTE && r.NOMINATIVO_CLIENTE) cur.NOMINATIVO_CLIENTE = r.NOMINATIVO_CLIENTE;
+    } else {
+      uniq.set(key, {
+        CODICE_CLIENTE: cc,
+        NDG: ndg,
+        NOMINATIVO_CLIENTE: r.NOMINATIVO_CLIENTE || '',
+        RELAZIONI: 1
+      });
+    }
+  }
+  S.master.rows = Array.from(uniq.values());
+  console.log('deriveMasterRows: ' + S.master.rows.length.toLocaleString('it') + ' clienti unici in ' + (performance.now()-t0).toFixed(0) + 'ms');
+}
+
+/* ---------- APP INIT ---------- */
+let appInit = false;
+function initAppOnce(){
+  if(appInit) return;
+  appInit = true;
+  loadColWidths();
+  document.getElementById('view-welcome').classList.remove('on');
+  buildHead('head-master', 'master');
+  buildHead('head-detail', 'detail');
+  buildNdgIndex();
+  // Sync cut-off input(s) with default value
+  showView('master');
+  recomputeMaster();
+  document.getElementById('job-info').textContent =
+    `${S.full.rows.length.toLocaleString('it')} righe totali  ·  ${S.master.rows.length.toLocaleString('it')} clienti unici`;
+  document.getElementById('btn-reload').style.display = '';
+  handleHash();
+}
+
+/* ---------- RELOAD (open a different file) ---------- */
+document.getElementById('btn-reload').addEventListener('click', () => {
+  if(!confirm('Caricare un nuovo file? I dati e i filtri attuali verranno scartati.')) return;
+  // Reset state
+  S.full.rows = []; S.full.byNdg = null;
+  S.master.rows = []; S.master.view = [];
+  S.master.search = ''; S.master.colFilters = {}; S.master.drilldown = {};
+  S.master.sortCol = 'NDG'; S.master.sortDir = 'asc';
+  S.detail.view = []; S.detail.search = ''; S.detail.colFilters = {};
+  S.detail.originNdg = null; S.detail.highlightDt = null;
+  S.loaded = { full:false };
+  // Allow initAppOnce to run again
+  appInit = false;
+  // Hide views, show welcome
+  document.querySelectorAll('main > .view').forEach(v => v.classList.remove('on'));
+  document.getElementById('view-welcome').classList.add('on');
+  document.getElementById('btn-reload').style.display = 'none';
+  document.getElementById('job-info').textContent = '';
+  document.getElementById('page-title').textContent = 'CS Relationships Viewer';
+  // Reset welcome status label and clear the file input so re-picking the SAME file fires "change"
+  setStatus('full', '— in attesa —');
+  const fileInput = document.getElementById('file-full');
+  if(fileInput) fileInput.value = '';
+  // Clear URL hash so we land on master next time
+  if(location.hash) history.replaceState(null, '', location.pathname + location.search);
+});
+
+/* ---------- VIEW ROUTING ---------- */
+function showView(name){
+  document.querySelectorAll('main > .view').forEach(v => v.classList.remove('on'));
+  document.getElementById('view-' + name).classList.add('on');
+  if(name === 'master') document.getElementById('page-title').textContent = 'CS Relationships — Clienti';
+  else if(name === 'detail') document.getElementById('page-title').textContent = 'CS Relationships — Dettaglio NDG';
+  else if(name === 'parent') document.getElementById('page-title').textContent = 'Legami del cliente';
+  else document.getElementById('page-title').textContent = 'CS Relationships Viewer';
+}
+function goToDetail(row){
+  if(!row || !row.NDG) return;
+  location.hash = '#ndg=' + encodeURIComponent(row.NDG);
+}
+function goToExplore(){
+  location.hash = '#explore';
+}
+function goToNode(ndg){
+  if(!ndg) return;
+  location.hash = '#node=' + encodeURIComponent(ndg);
+}
+// Legacy aliases (kept for backward compatibility with saved hashes)
+function goToParent(ndg){ goToNode(ndg); }
+function goToChild(ndg){ goToNode(ndg); }
+function handleHash(){
+  if(!appInit) return;
+  const h = location.hash.slice(1);
+  if(h === 'explore'){ openDetailFree(); return; }
+  // Canonical: #node=<NDG>
+  // Aliases #parent= and #child= are accepted as historical entry points.
+  let m;
+  if((m = /^node=(.+)$/.exec(h))   ||
+     (m = /^parent=(.+)$/.exec(h)) ||
+     (m = /^child=(.+)$/.exec(h))){
+    const ndg = decodeURIComponent(m[1].split('&')[0] || '');
+    if(ndg) openLinkView(ndg);
+    else showView('master');
+    return;
+  }
+  if(!h.startsWith('ndg=')){ showView('master'); return; }
+  const params = new URLSearchParams(h);
+  const ndg = params.get('ndg');
+  const dt = params.get('dt');
+  if(!ndg){ showView('master'); return; }
+  openDetail(ndg, dt);
+}
+window.addEventListener('hashchange', handleHash);
+document.getElementById('btn-back').addEventListener('click', () => { location.hash = ''; });
+document.getElementById('btn-open-full').addEventListener('click', () => goToExplore());
+document.getElementById('btn-parent-back').addEventListener('click', () => { history.back(); });
+
+/* ---------- LINK VIEW: navigate from current focus NDG ---------- */
+function getCurrentLinkFocus(){
+  const h = location.hash.slice(1);
+  const m = /^(?:node|parent|child)=(.+)$/.exec(h);
+  return m ? decodeURIComponent(m[1].split('&')[0] || '') : '';
+}
+function goToMasterWithNdg(ndg){
+  if(!ndg) { location.hash = ''; return; }
+  S.master.search = '';
+  S.master.colFilters = { NDG: ndg };
+  S.master.drilldown = {};
+  const sm = document.getElementById('search-master');
+  if(sm) sm.value = '';
+  location.hash = '';
+  showView('master');
+  recomputeMaster();
+}
+document.getElementById('btn-link-master').addEventListener('click', () => {
+  const ndg = getCurrentLinkFocus();
+  goToMasterWithNdg(ndg);
+});
+document.getElementById('btn-link-detail').addEventListener('click', () => {
+  const ndg = getCurrentLinkFocus();
+  if(ndg) goToDetail({ NDG: ndg });
+});
+
+function buildNdgIndex(){
+  if(S.full.byNdg) return;
+  const m = new Map();
+  for(const r of S.full.rows){
+    const k = r.NDG; if(!k) continue;
+    let arr = m.get(k); if(!arr){ arr = []; m.set(k, arr); }
+    arr.push(r);
+  }
+  S.full.byNdg = m;
+}
+function sortDetail(rows){
+  // NDG ASC, DT_INIZIO_RELAZIONE ASC, then DESCRIZIONE ASC
+  return rows.slice().sort((a,b) => {
+    const c1 = (a.NDG||'').localeCompare(b.NDG||''); if(c1) return c1;
+    const c2 = (a.DT_INIZIO_RELAZIONE||'').localeCompare(b.DT_INIZIO_RELAZIONE||''); if(c2) return c2;
+    return (a.DESCRIZIONE||'').localeCompare(b.DESCRIZIONE||'');
+  });
+}
+
+function openDetail(ndg, highlightDt){
+  showView('detail');
+  S.detail.originNdg = ndg;
+  S.detail.highlightDt = highlightDt || null;
+  // Set initial NDG filter (can be removed/changed by the user)
+  S.detail.colFilters = { NDG: ndg };
+  S.detail.search = '';
+  // Sync the breadcrumb and search field
+  document.getElementById('detail-ndg').textContent = ndg;
+  document.getElementById('detail-origin-sep').style.display = '';
+  document.getElementById('detail-origin-lbl').style.display = '';
+  document.getElementById('search-detail').value = '';
+  // Sync column-filter inputs (text)
+  document.querySelectorAll('#head-detail .col-filter').forEach(i => {
+    i.value = i.dataset.col === 'NDG' ? ndg : '';
+  });
+  // Clear range inputs
+  document.querySelectorAll('#head-detail .col-filter-range > input').forEach(i => { i.value = ''; });
+  recomputeDetail();
+}
+
+function openDetailFree(){
+  // Open detail with NO initial filter
+  showView('detail');
+  S.detail.originNdg = null;
+  S.detail.highlightDt = null;
+  S.detail.colFilters = {};
+  S.detail.search = '';
+  // Breadcrumb: no origin NDG
+  document.getElementById('detail-ndg').textContent = '(vista libera)';
+  document.getElementById('detail-origin-sep').style.display = 'none';
+  document.getElementById('detail-origin-lbl').style.display = 'none';
+  document.getElementById('search-detail').value = '';
+  document.querySelectorAll('#head-detail .col-filter').forEach(i => { i.value = ''; });
+  document.querySelectorAll('#head-detail .col-filter-range > input').forEach(i => { i.value = ''; });
+  recomputeDetail();
+}
+
+/* ============================================================
+   LINK VIEW — visualizzazione dei legami di un NDG
+   Mostra SEMPRE entrambi i lati:
+     · a sinistra: i PARENT del nodo focus (= nodi a cui il focus è legato come CHILD)
+     · al centro:  il nodo focus
+     · a destra:   i CHILD del nodo focus (= nodi che hanno il focus come PARENT)
+   La 'direction' parametro decide solo il titolo della pagina (punto di vista d'ingresso).
+============================================================ */
+function openLinkView(centerNdg){
+  showView('parent');
+
+  const centerRows = (S.full.byNdg && S.full.byNdg.get(centerNdg)) || [];
+  const centerDescr = centerRows.length ? (centerRows[0].NOMINATIVO_CLIENTE || '') : '';
+  const centerEor = null;
+
+  // PARENT del centro: i nodi che compaiono come PARENT nelle righe LINK del centro
+  const parentNdgs = new Set();
+  for(const r of centerRows){
+    if(r.PARENT && r.PARENT !== centerNdg) parentNdgs.add(r.PARENT);
+  }
+  // CHILD del centro: i nodi che hanno il centro come PARENT in qualche loro riga
+  const childNdgs = new Set();
+  for(const r of S.full.rows){
+    if(r.PARENT === centerNdg && r.NDG && r.NDG !== centerNdg) childNdgs.add(r.NDG);
+  }
+
+  // Per ogni coppia, l'info del legame con buildChildLinkInfo(parentNdg, childNdg)
+  // Sezione "PARENT": il centro è CHILD → buildChildLinkInfo(other, center)
+  const parentInfos = [];
+  for(const pNdg of parentNdgs){
+    const info = buildChildLinkInfo(pNdg, centerNdg);
+    if(info) parentInfos.push(info);
+  }
+  // Sezione "CHILD": il centro è PARENT → buildChildLinkInfo(center, other)
+  const childInfos = [];
+  for(const cNdg of childNdgs){
+    const info = buildChildLinkInfo(centerNdg, cNdg);
+    if(info) childInfos.push(info);
+  }
+  parentInfos.sort((a,b) => (b.dt_child_eor || '').localeCompare(a.dt_child_eor || ''));
+  childInfos.sort((a,b) => (b.dt_child_eor || '').localeCompare(a.dt_child_eor || ''));
+
+  // Header meta with both counts
+  const meta = `
+    <div class="row">
+      <div><span class="lbl">NDG</span> <span class="val">${esc(centerNdg)}</span></div>
+      <div><span class="lbl">Description</span> <span class="val">${esc(centerDescr || '—')}</span></div>
+      <div><span class="lbl">PARENT legati</span> <span class="val">${parentInfos.length}</span></div>
+      <div><span class="lbl">CHILD legati</span> <span class="val">${childInfos.length}</span></div>
+    </div>`;
+  document.getElementById('parent-stat').textContent = centerRows.length
+    ? `NDG ${centerNdg}  ·  ${parentInfos.length} PARENT  ·  ${childInfos.length} CHILD`
+    : `NDG ${centerNdg} (non presente nel file)`;
+
+  const wrap = document.getElementById('parent-wrap');
+  if(!parentInfos.length && !childInfos.length){
+    wrap.innerHTML = `
+      <div class="parent-meta">${meta}</div>
+      <div class="parent-empty">
+        <b>Nessun legame trovato per ${esc(centerNdg)}</b>
+        Non sono presenti né PARENT né CHILD legati a questo NDG.
+      </div>`;
+    return;
+  }
+
+  // Compute a global X domain (years) shared by all timelines
+  const allDates = [];
+  for(const info of [...parentInfos, ...childInfos]){
+    [info.dt_inilink, info.dt_endlink, info.dt_child_own, info.dt_parent_own, info.dt_child_eor].forEach(d => { if(d) allDates.push(d); });
+  }
+  allDates.sort();
+  const minY = allDates.length ? Math.max(1970, parseInt(allDates[0].slice(0,4)) - 1) : 2010;
+  const maxY = allDates.length ? parseInt(allDates[allDates.length-1].slice(0,4)) + 1 : 2026;
+  const domain = { minY, maxY };
+
+  // UML overview (always LTR: PARENT ← left, CHILD → right)
+  const uml = renderUmlDiagram({ centerNdg, centerDescr, centerEor, parentInfos, childInfos });
+
+  // Only the UML overview - no per-link timeline cards in this viewer.
+  wrap.innerHTML = `<div class="parent-meta">${meta}</div>${uml}`;
+
+  // Wire up clicks on UML nodes to navigate to that node's link view
+  wrap.querySelectorAll('.uml-node').forEach(n => {
+    n.addEventListener('click', () => {
+      const targetNdg = n.dataset.ndg;
+      if(targetNdg) goToNode(targetNdg);
+    });
+  });
+}
+
+/* Render the UML overview diagram.
+   Layout sempre LTR: PARENTs a sinistra, nodo focus al centro, CHILDren a destra.
+   Le frecce vanno sempre da SX (parent) verso DX (child) per ribadire il senso.
+   Ogni badge laterale è cliccabile e porta alla vista reciproca del nodo. */
+function renderUmlDiagram(opts){
+  const { centerNdg, centerDescr, centerEor, parentInfos = [], childInfos = [] } = opts;
+  const W = 1200;
+  const ITEM_H = 70;
+  const PAD_TOP = 24, PAD_BOTTOM = 24;
+  const maxRows = Math.max(parentInfos.length, childInfos.length, 1);
+  const H = Math.max(200, PAD_TOP + maxRows * ITEM_H + PAD_BOTTOM);
+
+  // Center node geometry
+  const cw = 260, ch = 100;
+  const cx = (W - cw) / 2;
+  const cy = (H - ch) / 2;
+  const cxL = cx, cxR = cx + cw, cxMid = cx + cw/2, cyMid = cy + ch/2;
+
+  // Side badges geometry
+  const sw = 270, sh = 56;
+  const xLeftBadge  = 30;                  // PARENT column
+  const xRightBadge = W - sw - 30;         // CHILD column
+
+  // Vertical positions: distribute each side's rows evenly across [PAD_TOP, H-PAD_BOTTOM]
+  function colYs(n){
+    if(n === 0) return [];
+    if(n === 1) return [H / 2 - sh / 2];
+    const avail = (H - PAD_TOP - PAD_BOTTOM) - sh;
+    const step = avail / (n - 1);
+    return Array.from({length:n}, (_, i) => PAD_TOP + i*step);
+  }
+  const yParents  = colYs(parentInfos.length);
+  const yChildren = colYs(childInfos.length);
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMin meet">`;
+
+  // Center badge (focus)
+  svg += `
+    <rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="8"
+          fill="var(--head-bg)" stroke="var(--head-bg)"/>
+    <text x="${cxMid}" y="${cy+18}" font-size="10" font-weight="700" letter-spacing="2"
+          fill="var(--red)" text-anchor="middle">FOCUS</text>
+    <text x="${cxMid}" y="${cy+42}" font-size="17" font-weight="700"
+          fill="var(--head-fg)" text-anchor="middle">${esc(centerNdg)}</text>
+    <text x="${cxMid}" y="${cy+62}" font-size="12"
+          fill="var(--head-fg)" text-anchor="middle" opacity="0.85">${esc(truncate(centerDescr || '', 30))}</text>
+  `;
+
+  // PARENT badges (left side). Arrows go LEFT→RIGHT (parent → focus).
+  parentInfos.forEach((info, i) => {
+    const oy = yParents[i];
+    const oyMid = oy + sh/2;
+    const linkColor = info.caseA ? 'var(--red)' : 'var(--link-bd)';
+    // From parent right edge → focus left edge
+    const x1 = xLeftBadge + sw, y1 = oyMid;
+    const x2 = cxL, y2 = cyMid;
+    const dx = (x2 - x1) * 0.55;
+    svg += `<path d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"
+                  fill="none" stroke="${linkColor}" stroke-width="2" opacity="0.85"/>`;
+    // Arrow head pointing into the focus
+    const ah = 5;
+    svg += `<polygon points="${x2},${y2} ${x2-ah*1.6},${y2-ah} ${x2-ah*1.6},${y2+ah}" fill="${linkColor}"/>`;
+    // SOURCE label centered on the curve
+    svg += sourceLabelOnArrow(x1, y1, x2, y2, info.sources, linkColor);
+    // Parent badge — clicking opens "Legami del PARENT" of that NDG (i.e. as-parent for that node)
+    svg += `
+      <g class="uml-node" data-ndg="${esc(info.parentNdg)}" data-dir="as-parent">
+        <rect x="${xLeftBadge}" y="${oy}" width="${sw}" height="${sh}" rx="6"
+              fill="var(--bg)" stroke="${linkColor}" stroke-width="1.5"/>
+        <text x="${xLeftBadge+12}" y="${oy+15}" font-size="9" font-weight="700" letter-spacing="1.5"
+              fill="${linkColor}">PARENT</text>
+        <text class="uml-ndg" x="${xLeftBadge+12}" y="${oy+33}" font-size="14" font-weight="700"
+              fill="var(--fg)">${esc(info.parentNdg)}</text>
+        <text x="${xLeftBadge+12}" y="${oy+49}" font-size="11"
+              fill="var(--fg-soft)">${esc(truncate(info.parentDescr || '', 30))}</text>
+        ${info.dt_parent_own ? `<text x="${xLeftBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
+              fill="${linkColor}" text-anchor="end">${esc(info.dt_parent_own)}</text>` : ''}
+        <text x="${xLeftBadge+sw-12}" y="${oy+49}" font-size="9" letter-spacing="1"
+              fill="var(--fg-mute)" text-anchor="end">${info.caseA ? 'ATTIVO' : 'CHIUSO'}</text>
+      </g>`;
+  });
+
+  // CHILD badges (right side). Arrows go LEFT→RIGHT (focus → child).
+  childInfos.forEach((info, i) => {
+    const oy = yChildren[i];
+    const oyMid = oy + sh/2;
+    const linkColor = info.caseA ? 'var(--red)' : 'var(--link-bd)';
+    const x1 = cxR, y1 = cyMid;
+    const x2 = xRightBadge, y2 = oyMid;
+    const dx = (x2 - x1) * 0.55;
+    svg += `<path d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"
+                  fill="none" stroke="${linkColor}" stroke-width="2" opacity="0.85"/>`;
+    const ah = 5;
+    svg += `<polygon points="${x2},${y2} ${x2-ah*1.6},${y2-ah} ${x2-ah*1.6},${y2+ah}" fill="${linkColor}"/>`;
+    // SOURCE label centered on the curve
+    svg += sourceLabelOnArrow(x1, y1, x2, y2, info.sources, linkColor);
+    svg += `
+      <g class="uml-node" data-ndg="${esc(info.childNdg)}" data-dir="as-child">
+        <rect x="${xRightBadge}" y="${oy}" width="${sw}" height="${sh}" rx="6"
+              fill="var(--bg)" stroke="${linkColor}" stroke-width="1.5"/>
+        <text x="${xRightBadge+12}" y="${oy+15}" font-size="9" font-weight="700" letter-spacing="1.5"
+              fill="${linkColor}">CHILD</text>
+        <text class="uml-ndg" x="${xRightBadge+12}" y="${oy+33}" font-size="14" font-weight="700"
+              fill="var(--fg)">${esc(info.childNdg)}</text>
+        <text x="${xRightBadge+12}" y="${oy+49}" font-size="11"
+              fill="var(--fg-soft)">${esc(truncate(info.childDescr || '', 30))}</text>
+        ${info.dt_child_eor ? `<text x="${xRightBadge+sw-12}" y="${oy+33}" font-size="11" font-weight="600"
+              fill="${linkColor}" text-anchor="end">${esc(info.dt_child_eor)}</text>` : ''}
+        <text x="${xRightBadge+sw-12}" y="${oy+49}" font-size="9" letter-spacing="1"
+              fill="var(--fg-mute)" text-anchor="end">${info.caseA ? 'ATTIVO' : 'CHIUSO'}</text>
+      </g>`;
+  });
+
+  svg += `</svg>`;
+  return `<div class="uml-wrap">${svg}</div>`;
+}
+
+function truncate(s, n){
+  if(!s) return '';
+  if(s.length <= n) return s;
+  return s.slice(0, n-1) + '…';
+}
+
+/* Build a tagged SOURCE label centered on the bezier connecting (x1,y1)→(x2,y2).
+   The label is rendered as a rectangle with text inside, so it remains readable
+   even when the arrow runs underneath. If multiple sources exist, the first one
+   is shown plus "+N" when there are more — the "+N" suffix is always preserved
+   even when the source name is very long. */
+function sourceLabelOnArrow(x1, y1, x2, y2, sources, color){
+  if(!sources || !sources.length) return '';
+  // "+N" suffix must always stay visible → reserve its space first
+  const suffix = sources.length > 1 ? '  +' + (sources.length - 1) : '';
+  const MAX_TOTAL = 28;
+  const maxSrcLen = Math.max(8, MAX_TOTAL - suffix.length);
+  const firstSrc = truncate(sources[0] || '', maxSrcLen);
+  const label = firstSrc + suffix;
+  if(!label) return '';
+  const cx = (x1 + x2) / 2;
+  const cy = (y1 + y2) / 2;
+  // Estimate rectangle width based on label length (rough but works for SVG sans-serif)
+  const w = Math.max(60, label.length * 6.5 + 14);
+  const h = 16;
+  return `
+    <g class="uml-src-label" pointer-events="none">
+      <rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" rx="3"
+            fill="var(--bg)" stroke="${color}" stroke-width="1" opacity="0.95"/>
+      <text x="${cx}" y="${cy + 4}" font-size="10" font-weight="600"
+            fill="${color}" text-anchor="middle">${esc(label)}</text>
+    </g>`;
+}
+
+// Legacy wrapper (kept for any external caller)
+// Legacy wrapper kept for any callers using the old name
+function openParentView(parentNdg){ openLinkView(parentNdg); }
+
+function buildChildLinkInfo(parentNdg, childNdg){
+  const childRows = (S.full.byNdg && S.full.byNdg.get(childNdg)) || [];
+  if(!childRows.length) return null;
+  // Any row whose PARENT == parentNdg is a link between the two nodes
+  const linkRows = childRows.filter(r => r.PARENT === parentNdg);
+  if(!linkRows.length) return null;
+  // DT_INIZIO_RELAZIONE: earliest start
+  const inis = linkRows.map(r => r.DT_INIZIO_RELAZIONE).filter(Boolean).sort();
+  const dt_inilink = inis[0] || null;
+  // DT_FINE_RELAZIONE: if ANY row is open, the link is open overall
+  const someOpen = linkRows.some(r => !r.DT_FINE_RELAZIONE);
+  const ends = linkRows.map(r => r.DT_FINE_RELAZIONE).filter(Boolean).sort();
+  const dt_endlink = someOpen ? null : (ends.length ? ends[ends.length-1] : null);
+  // "sources" here are the human-readable descrizione of the relations
+  const uniq = new Set();
+  linkRows.forEach(r => {
+    const d = (r.DESCRIZIONE || '').trim();
+    const t = (r.TIPO_RELAZIONE || '').trim();
+    const s = d ? d + (t ? ' (' + t + ')' : '') : (t || '');
+    if(s) uniq.add(s);
+  });
+  const sources = Array.from(uniq);
+  // Case A vs B — apolo=aperto se il legame è ancora aperto
+  const caseA = someOpen;
+  // Names from any row of the parent / child
+  const parentRows = (S.full.byNdg && S.full.byNdg.get(parentNdg)) || [];
+  const parentDescr = parentRows.length ? (parentRows[0].NOMINATIVO_CLIENTE || '') : '';
+  const childDescr = childRows.length ? (childRows[0].NOMINATIVO_CLIENTE || '') : '';
+  return {
+    parentNdg, childNdg,
+    parentDescr, childDescr,
+    dt_inilink, dt_endlink,
+    sources,
+    caseA,
+    // Aliases kept so the existing rendering functions can consume them unchanged
+    dt_parent_own: null,      // no "own EoR" concept in this viewer
+    dt_child_own: null,
+    dt_child_eor: dt_endlink  // used only for sorting
+  };
+}
+
+
+function maxIso(a, b){
+  if(!a) return b || null;
+  if(!b) return a || null;
+  return a > b ? a : b;
+}
+
+function recomputeDetail(){
+  filterDetail();
+  S.detail.view = sortDetail(S.detail.view);
+  renderActiveChipsDetail();
+  renderDetailGrid();
+  document.getElementById('stat-detail-shown').textContent = S.detail.view.length.toLocaleString('it');
+  document.getElementById('stat-detail-total').textContent = S.full.rows.length.toLocaleString('it');
+}
+
+function filterDetail(){
+  const search = S.detail.search.toLowerCase();
+  const colFPlain = [];
+  const colFRange = [];
+  for(const [c, v] of Object.entries(S.detail.colFilters)){
+    if(v && typeof v === 'object' && ('from' in v || 'to' in v)) colFRange.push([c, v]);
+    else colFPlain.push([c, String(v).toLowerCase()]);
+  }
+  // Fast path: only NDG filter set AND the value is an exact NDG → use the pre-built index.
+  // Otherwise (substring match), fall through to the generic filter.
+  if(S.detail.colFilters.NDG && !search && Object.keys(S.detail.colFilters).length === 1 && colFRange.length === 0){
+    const ndgVal = S.detail.colFilters.NDG;
+    if(S.full.byNdg.has(ndgVal)){
+      S.detail.view = S.full.byNdg.get(ndgVal).slice();
+      return;
+    }
+    // not an exact match → continue to generic substring filter
+  }
+  // Generic filter — Detail shows complete data; retention cut-off is NOT applied here
+  S.detail.view = S.full.rows.filter(r => {
+    if(search){
+      let any = false;
+      for(const c of COLS){
+        const v = r[c];
+        if(v != null && String(v).toLowerCase().includes(search)){ any = true; break; }
+      }
+      if(!any) return false;
+    }
+    for(const [c,v] of colFPlain){
+      const cell = r[c]; if(cell == null) return false;
+      if(!String(cell).toLowerCase().includes(v)) return false;
+    }
+    for(const [c, rng] of colFRange){
+      const cell = r[c]; if(cell == null) return false;
+      const cs = String(cell);
+      if(rng.from && cs < rng.from) return false;
+      if(rng.to   && cs > rng.to)   return false;
+    }
+    return true;
+  });
+}
+
+function renderActiveChipsDetail(){
+  const el = document.getElementById('active-filters-detail');
+  const chips = [];
+  if(S.detail.search) chips.push(['ricerca', S.detail.search, () => {
+    S.detail.search = ''; document.getElementById('search-detail').value = ''; recomputeDetail();
+  }]);
+  for(const [c, v] of Object.entries(S.detail.colFilters)){
+    const isRange = v && typeof v === 'object' && ('from' in v || 'to' in v);
+    const cLabel = (COL_HINTS[c] && COL_HINTS[c].label) || c;
+    chips.push([cLabel, isRange ? formatDateRange(v) : v, () => {
+      delete S.detail.colFilters[c];
+      // Clear text-style inputs
+      document.querySelectorAll('#head-detail .col-filter').forEach(i => { if(i.dataset.col === c) i.value = ''; });
+      // Clear range inputs
+      document.querySelectorAll(`#head-detail .col-filter-range > input[data-col="${c}"]`).forEach(i => { i.value = ''; });
+      // If the user removed the NDG filter, hide the origin label
+      if(c === 'NDG') {
+        document.getElementById('detail-origin-sep').style.display = 'none';
+        document.getElementById('detail-origin-lbl').style.display = 'none';
+        document.getElementById('detail-ndg').textContent = '(vista libera)';
+      }
+      recomputeDetail();
+    }]);
+  }
+  if(!chips.length){ el.classList.remove('on'); el.innerHTML = ''; return; }
+  el.classList.add('on');
+  el.innerHTML = '<span style="font-weight:600">Filtri attivi:</span>' +
+    chips.map((c, i) => `<span class="chip"><b>${esc(c[0])}</b> = ${esc(c[1])} <span class="x" data-i="${i}">×</span></span>`).join('');
+  el.querySelectorAll('.x').forEach((x, i) => x.addEventListener('click', () => chips[i][2]()));
+}
+
+/* ---------- COLUMN WIDTHS (persisted) ---------- */
+const WIDTH_STORE_KEY = 'cs-rel-col-widths-v1';
+function loadColWidths(){
+  try {
+    const raw = localStorage.getItem(WIDTH_STORE_KEY);
+    if(!raw) return;
+    const obj = JSON.parse(raw);
+    for(const k in obj){
+      if(COL_HINTS[k] && typeof obj[k] === 'number' && obj[k] >= 40 && obj[k] <= 1600){
+        COL_HINTS[k].width = obj[k];
+      }
+    }
+  } catch(e){}
+}
+function saveColWidth(col, w){
+  let obj = {};
+  try { obj = JSON.parse(localStorage.getItem(WIDTH_STORE_KEY) || '{}'); } catch(e){}
+  obj[col] = w;
+  localStorage.setItem(WIDTH_STORE_KEY, JSON.stringify(obj));
+}
+function setColumnWidth(col, w){
+  w = Math.max(40, Math.min(1600, Math.round(w)));
+  COL_HINTS[col].width = w;
+  // update head cells in both views
+  document.querySelectorAll(`.grid-head .cell[data-col="${col}"]`).forEach(c => { c.style.width = w + 'px'; });
+  // update body cells (currently rendered virtual rows)
+  document.querySelectorAll(`.virtual-row .cell[data-col="${col}"]`).forEach(c => { c.style.width = w + 'px'; });
+}
+
+/* ---------- GRID HEAD ---------- */
+function buildHead(elId, target){
+  // target = 'master' or 'detail'
+  const isMaster = (target === 'master');
+  const el = document.getElementById(elId); el.innerHTML = '';
+  const cols = colsFor(target);
+  for(const col of cols){
+    const w = COL_HINTS[col].width;
+    const hint = COL_HINTS[col];
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.dataset.col = col;
+    cell.style.width = w + 'px'; cell.style.flexShrink = '0';
+    const isLast = col === cols[cols.length - 1];
+    const filterHtml = hint.unfilterable
+      ? ''
+      : (col.indexOf('DT_') === 0)
+        ? `<div class="col-filter-range" data-col="${esc(col)}">
+             <input data-col="${esc(col)}" data-range="from" placeholder="dal…" title="dal, formato AAAA o AAAA-MM o AAAA-MM-GG">
+             <input data-col="${esc(col)}" data-range="to"   placeholder="al…"  title="al, formato AAAA o AAAA-MM o AAAA-MM-GG">
+           </div>`
+        : `<input class="col-filter" data-col="${esc(col)}" placeholder="filtra…">`;
+    const sortInner = hint.unsortable
+      ? `<span>${esc(hint.label || col)}</span>`
+      : `<span>${esc(hint.label || col)}</span><span class="sort-i">↕</span>`;
+    cell.innerHTML = `
+      <div class="sort-trig" data-col="${esc(col)}" title="${esc(col)}"${hint.unsortable ? ' style="cursor:default"' : ''}>
+        ${sortInner}
+      </div>
+      ${filterHtml}
+      ${!isLast ? `<div class="resizer" data-col="${esc(col)}" title="Trascina per ridimensionare · doppio click per reset"></div>` : ''}
+    `;
+    el.appendChild(cell);
+  }
+  // Sort handlers — only on master; detail sort is fixed
+  el.querySelectorAll('.sort-trig').forEach(t => {
+    t.addEventListener('click', () => {
+      if(!isMaster) return;
+      const col = t.dataset.col;
+      if(COL_HINTS[col] && COL_HINTS[col].unsortable) return;
+      if(S.master.sortCol === col) S.master.sortDir = S.master.sortDir === 'asc' ? 'desc' : 'asc';
+      else { S.master.sortCol = col; S.master.sortDir = 'asc'; }
+      updateSortIndicators('head-master', S.master.sortCol, S.master.sortDir);
+      sortMaster(); renderMasterGrid();
+    });
+  });
+  // Plain (text) filter handlers
+  el.querySelectorAll('.col-filter').forEach(inp => {
+    inp.addEventListener('input', debounce(() => {
+      const col = inp.dataset.col, v = inp.value.trim();
+      const state = isMaster ? S.master : S.detail;
+      if(v) state.colFilters[col] = v;
+      else delete state.colFilters[col];
+      // If user types into NDG filter on detail and clears it, hide origin label
+      if(!isMaster && col === 'NDG' && !v){
+        document.getElementById('detail-origin-sep').style.display = 'none';
+        document.getElementById('detail-origin-lbl').style.display = 'none';
+        document.getElementById('detail-ndg').textContent = '(vista libera)';
+      }
+      if(isMaster) recomputeMaster();
+      else        recomputeDetail();
+    }, 200));
+  });
+  // Date-range filter handlers (DT_INIZIO_RELAZIONE, DT_FINE_RELAZIONE)
+  el.querySelectorAll('.col-filter-range > input').forEach(inp => {
+    inp.addEventListener('input', debounce(() => {
+      const col = inp.dataset.col;
+      const state = isMaster ? S.master : S.detail;
+      const parent = inp.closest('.col-filter-range');
+      const fromIn = parent.querySelector('input[data-range="from"]').value.trim();
+      const toIn   = parent.querySelector('input[data-range="to"]').value.trim();
+      const from = expandDateFrom(fromIn);
+      const to   = expandDateTo(toIn);
+      if(from || to) state.colFilters[col] = { from, to };
+      else delete state.colFilters[col];
+      if(isMaster) recomputeMaster();
+      else         recomputeDetail();
+    }, 200));
+  });
+  // Resize handlers
+  el.querySelectorAll('.resizer').forEach(r => {
+    r.addEventListener('mousedown', e => startColResize(e, r));
+    r.addEventListener('dblclick', e => {
+      const col = r.dataset.col;
+      const defaults = {CODICE_CLIENTE:110, NDG:90, NOMINATIVO_CLIENTE:260, PARENT:90, DT_INIZIO_RELAZIONE:120, DT_FINE_RELAZIONE:120, DESCRIZIONE:280, TIPO_RELAZIONE:90, CS_APP:100, RELAZIONI:110, AZIONI:180};
+      const def = defaults[col] || 130;
+      setColumnWidth(col, def);
+      saveColWidth(col, def);
+    });
+  });
+  if(isMaster) updateSortIndicators('head-master', S.master.sortCol, S.master.sortDir);
+}
+
+function startColResize(e, handle){
+  e.preventDefault(); e.stopPropagation();
+  const col = handle.dataset.col;
+  const startX = e.clientX;
+  const startW = COL_HINTS[col].width;
+  handle.classList.add('dragging');
+  document.body.classList.add('col-resizing');
+  // Also highlight the twin handle in the other view, if present
+  document.querySelectorAll(`.grid-head .resizer[data-col="${col}"]`).forEach(h => h.classList.add('dragging'));
+
+  function onMove(ev){
+    const dx = ev.clientX - startX;
+    setColumnWidth(col, startW + dx);
+  }
+  function onUp(){
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.classList.remove('col-resizing');
+    document.querySelectorAll(`.grid-head .resizer[data-col="${col}"]`).forEach(h => h.classList.remove('dragging'));
+    saveColWidth(col, COL_HINTS[col].width);
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function updateSortIndicators(elId, col, dir){
+  document.getElementById(elId).querySelectorAll('.sort-trig').forEach(t => {
+    if(t.dataset.col === col){ t.classList.add('sorted'); t.querySelector('.sort-i').textContent = dir === 'asc' ? '↑' : '↓'; }
+    else { t.classList.remove('sorted'); t.querySelector('.sort-i').textContent = '↕'; }
+  });
+}
+
+/* ---------- RETENTION CUT-OFF (shared between views) ---------- */
+
+
+/* ---------- MASTER PIPELINE ---------- */
+document.getElementById('search-master').addEventListener('input', debounce(e => {
+  S.master.search = e.target.value; recomputeMaster();
+}, 250));
+document.getElementById('btn-master-reset').addEventListener('click', () => {
+  S.master.search = ''; S.master.colFilters = {}; S.master.drilldown = {};
+  document.getElementById('search-master').value = '';
+  document.querySelectorAll('#head-master .col-filter').forEach(i => i.value = '');
+  document.querySelectorAll('#head-master .col-filter-range > input').forEach(i => i.value = '');
+  // Restore default cut-off
+  deriveMasterRows();
+  recomputeMaster();
+});
+document.getElementById('btn-master-export').addEventListener('click', () => exportCsv(S.master.view, 'eormaster_view', 'master'));
+document.getElementById('btn-detail-export').addEventListener('click', () => {
+  const name = (S.detail.colFilters.NDG && Object.keys(S.detail.colFilters).length === 1 && !S.detail.search)
+    ? 'eorfull_NDG_' + S.detail.colFilters.NDG
+    : 'eorfull_view';
+  exportCsv(S.detail.view, name, 'detail');
+});
+document.getElementById('search-detail').addEventListener('input', debounce(e => {
+  S.detail.search = e.target.value; recomputeDetail();
+}, 250));
+document.getElementById('btn-detail-reset').addEventListener('click', () => {
+  S.detail.search = ''; S.detail.colFilters = {};
+  document.getElementById('search-detail').value = '';
+  document.querySelectorAll('#head-detail .col-filter').forEach(i => i.value = '');
+  document.querySelectorAll('#head-detail .col-filter-range > input').forEach(i => i.value = '');
+  document.getElementById('detail-origin-sep').style.display = 'none';
+  document.getElementById('detail-origin-lbl').style.display = 'none';
+  document.getElementById('detail-ndg').textContent = '(vista libera)';
+  recomputeDetail();
+});
+
+function recomputeMaster(){
+  filterMaster(); sortMaster();
+  computeMasterAggs(); renderActiveChips();
+  renderMasterGrid(); updateMasterStats();
+}
+function filterMaster(){
+  const search = S.master.search.toLowerCase();
+  // Split filters into "plain" (string includes) vs "range" (date {from,to})
+  const colFPlain = [];
+  const colFRange = [];
+  for(const [c, v] of Object.entries(S.master.colFilters)){
+    if(v && typeof v === 'object' && ('from' in v || 'to' in v)) colFRange.push([c, v]);
+    else colFPlain.push([c, String(v).toLowerCase()]);
+  }
+  const drill = Object.entries(S.master.drilldown);
+  const masterCols = colsFor('master');
+  S.master.view = S.master.rows.filter(r => {
+    if(search){
+      let any = false;
+      for(const c of masterCols){
+        const v = r[c];
+        if(v != null && String(v).toLowerCase().includes(search)){ any = true; break; }
+      }
+      if(!any) return false;
+    }
+    for(const [c,v] of colFPlain){
+      const cell = r[c]; if(cell == null) return false;
+      if(!String(cell).toLowerCase().includes(v)) return false;
+    }
+    for(const [c, rng] of colFRange){
+      const cell = r[c]; if(cell == null) return false;
+      const cs = String(cell);
+      if(rng.from && cs < rng.from) return false;
+      if(rng.to   && cs > rng.to)   return false;
+    }
+    for(const [c,v] of drill){ if(String(r[c]) !== String(v)) return false; }
+    return true;
+  });
+}
+function sortMaster(){
+  if(!S.master.sortCol) return;
+  const col = S.master.sortCol;
+  const dir = S.master.sortDir === 'asc' ? 1 : -1;
+  const type = COL_HINTS[col].type;
+  S.master.view.sort((a,b) => {
+    const va = a[col], vb = b[col];
+    if(va == null && vb == null) return 0;
+    if(va == null) return 1;
+    if(vb == null) return -1;
+    if(type === 'number') return (Number(va) - Number(vb)) * dir;
+    return String(va).localeCompare(String(vb)) * dir;
+  });
+}
+function updateMasterStats(){
+  document.getElementById('stat-master-shown').textContent = S.master.view.length.toLocaleString('it');
+  document.getElementById('stat-master-total').textContent = S.master.rows.length.toLocaleString('it');
+}
+
+/* ---------- AGGREGATIONS ---------- */
+function computeMasterAggs(){
+  // Metric panels removed in this viewer — the master rows are aggregates
+  // per (CODICE_CLIENTE, NDG) that do not carry CS_APP / TIPO_RELAZIONE.
+}
+function countBy(rows, col){
+  const m = new Map();
+  for(const r of rows){
+    let k = r[col]; if(k == null || k === '') k = '(vuoto)';
+    m.set(k, (m.get(k) || 0) + 1);
+  }
+  return Array.from(m.entries()).sort((a,b) => b[1] - a[1]);
+}
+function renderKVPanel(panelId, entries, drillCol, opts={}){
+  const el = document.getElementById(panelId);
+  if(!entries.length){ el.innerHTML = '<div style="color:var(--fg-mute); font-size:11px; padding:4px">— nessun dato —</div>'; return; }
+  const total = entries.reduce((s, [,c]) => s + c, 0);
+  const max = entries[0][1];
+  el.innerHTML = '';
+  for(const [k, c] of entries){
+    const div = document.createElement('div');
+    const isActive = S.master.drilldown[drillCol] != null && String(S.master.drilldown[drillCol]) === String(k);
+    div.className = 'kv' + (isActive ? ' active' : '');
+    const labelHtml = opts.renderLabel ? opts.renderLabel(k) : esc(k);
+    const pct = (c / total * 100).toFixed(1);
+    const barPct = (c / max * 100);
+    div.innerHTML = `
+      <div>
+        <div class="kv-row"><span class="kv-k">${labelHtml}</span><span class="kv-c">${c.toLocaleString('it')}  ·  ${pct}%</span></div>
+        <div class="bar"><div style="width:${barPct}%"></div></div>
+      </div>`;
+    div.addEventListener('click', () => {
+      if(S.master.drilldown[drillCol] != null && String(S.master.drilldown[drillCol]) === String(k)) delete S.master.drilldown[drillCol];
+      else S.master.drilldown[drillCol] = k;
+      recomputeMaster();
+    });
+    el.appendChild(div);
+  }
+}
+
+
+function renderActiveChips(){
+  const el = document.getElementById('active-filters-master');
+  const chips = [];
+  if(S.master.search) chips.push(['ricerca', S.master.search, () => {
+    S.master.search = ''; document.getElementById('search-master').value = ''; recomputeMaster();
+  }]);
+  for(const [c, v] of Object.entries(S.master.colFilters)){
+    const isRange = v && typeof v === 'object' && ('from' in v || 'to' in v);
+    const cLabel = (COL_HINTS[c] && COL_HINTS[c].label) || c;
+    chips.push([cLabel, isRange ? formatDateRange(v) : v, () => {
+      delete S.master.colFilters[c];
+      document.querySelectorAll('#head-master .col-filter').forEach(i => { if(i.dataset.col === c) i.value = ''; });
+      document.querySelectorAll(`#head-master .col-filter-range > input[data-col="${c}"]`).forEach(i => { i.value = ''; });
+      recomputeMaster();
+    }]);
+  }
+  for(const [c, v] of Object.entries(S.master.drilldown)){
+    const cLabel = (COL_HINTS[c] && COL_HINTS[c].label) || c;
+    chips.push([cLabel, v, () => { delete S.master.drilldown[c]; recomputeMaster(); }]);
+  }
+  if(!chips.length){ el.classList.remove('on'); el.innerHTML = ''; return; }
+  el.classList.add('on');
+  el.innerHTML = '<span style="font-weight:600">Filtri attivi:</span>' +
+    chips.map((c, i) => `<span class="chip"><b>${esc(c[0])}</b> = ${esc(c[1])} <span class="x" data-i="${i}">×</span></span>`).join('');
+  el.querySelectorAll('.x').forEach((x, i) => x.addEventListener('click', () => chips[i][2]()));
+}
+
+/* ---------- VIRTUAL GRIDS ---------- */
+const bodyM = document.getElementById('body-master');
+const spacerM = document.getElementById('spacer-master');
+const vpM = document.getElementById('viewport-master');
+const headM = document.getElementById('head-master');
+bodyM.addEventListener('scroll', () => {
+  headM.scrollLeft = bodyM.scrollLeft;
+  renderVisibleMaster();
+});
+
+function renderMasterGrid(){ spacerM.style.height = (S.master.view.length * ROW_H) + 'px'; bodyM.scrollTop = 0; renderVisibleMaster(); }
+function renderVisibleMaster(){
+  const total = S.master.view.length;
+  if(!total){
+    vpM.innerHTML = '<div class="empty"><b>Nessuna riga corrisponde ai filtri attivi</b>Modifica o azzera i filtri.</div>';
+    document.getElementById('render-stats').textContent = ''; return;
+  }
+  const scrollTop = bodyM.scrollTop;
+  const viewportH = bodyM.clientHeight;
+  const buffer = 5;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_H) - buffer);
+  const end = Math.min(total, Math.ceil((scrollTop + viewportH) / ROW_H) + buffer);
+  const t0 = performance.now();
+  let html = '';
+  const cols = colsFor('master');
+  for(let i = start; i < end; i++){
+    const r = S.master.view[i];
+    html += `<div class="virtual-row" data-i="${i}" style="top:${i*ROW_H}px; height:${ROW_H}px">`;
+    for(const col of cols){
+      const w = COL_HINTS[col].width;
+      const rend = COL_HINTS[col].render;
+      const v = r[col];
+      html += `<div class="cell" data-col="${col}" style="width:${w}px; flex-shrink:0">${rend ? rend(v) : esc(v)}</div>`;
+    }
+    html += `</div>`;
+  }
+  vpM.innerHTML = html;
+  // Delegate clicks to the action buttons only; clicking on the row itself
+  // does nothing (the user must use the DETAILS/LINK buttons explicitly).
+  vpM.querySelectorAll('.virtual-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-act]');
+      if(!btn) return;
+      const r = S.master.view[Number(row.dataset.i)];
+      if(!r) return;
+      if(btn.dataset.act === 'details') goToDetail(r);
+      else if(btn.dataset.act === 'link') goToNode(r.NDG);
+    });
+  });
+  document.getElementById('render-stats').textContent = `${(end-start)} righe renderizzate in ${(performance.now()-t0).toFixed(0)}ms`;
+}
+
+const bodyD = document.getElementById('body-detail');
+const spacerD = document.getElementById('spacer-detail');
+const vpD = document.getElementById('viewport-detail');
+const headD = document.getElementById('head-detail');
+bodyD.addEventListener('scroll', () => {
+  headD.scrollLeft = bodyD.scrollLeft;
+  renderVisibleDetail();
+});
+// Click on a PARENT or NDG cell → open "Legami del NDG" for that NDG
+vpD.addEventListener('click', e => {
+  const cell = e.target.closest('.cell[data-col="PARENT"], .cell[data-col="NDG"]');
+  if(!cell) return;
+  const v = (cell.textContent || '').trim();
+  if(v) goToNode(v);
+});
+
+function renderDetailGrid(){ spacerD.style.height = (S.detail.view.length * ROW_H) + 'px'; bodyD.scrollTop = 0; renderVisibleDetail(); }
+function renderVisibleDetail(){
+  const total = S.detail.view.length;
+  if(!total){
+    vpD.innerHTML = `<div class="empty"><b>Nessuna riga corrisponde ai filtri attivi</b>Rimuovi qualche filtro per allargare la ricerca.</div>`;
+    return;
+  }
+  const scrollTop = bodyD.scrollTop;
+  const viewportH = bodyD.clientHeight;
+  const buffer = 5;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_H) - buffer);
+  const end = Math.min(total, Math.ceil((scrollTop + viewportH) / ROW_H) + buffer);
+  let html = '';
+  const cols = colsFor('detail');
+  for(let i = start; i < end; i++){
+    const r = S.detail.view[i];
+    const isMaster = false;
+    html += `<div class="virtual-row${isMaster ? ' master-row' : ''}" style="top:${i*ROW_H}px; height:${ROW_H}px">`;
+    for(const col of cols){
+      const w = COL_HINTS[col].width;
+      const rend = COL_HINTS[col].render;
+      const v = r[col];
+      html += `<div class="cell" data-col="${col}" style="width:${w}px; flex-shrink:0">${rend ? rend(v) : esc(v)}</div>`;
+    }
+    html += `</div>`;
+  }
+  vpD.innerHTML = html;
+}
+
+/* ---------- EXPORT ---------- */
+function exportCsv(rows, basename, view){
+  if(!rows.length) return;
+  const fields = view ? colsFor(view) : COLS;
+  const csv = Papa.unparse({ fields, data: rows.map(r => fields.map(c => r[c] ?? '')) });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${basename}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ---------- KEYBOARD ---------- */
+document.addEventListener('keydown', e => {
+  if((e.ctrlKey || e.metaKey) && e.key === 'k'){
+    e.preventDefault();
+    if(document.getElementById('view-master').classList.contains('on')) document.getElementById('search-master').focus();
+    else if(document.getElementById('view-detail').classList.contains('on')) document.getElementById('search-detail').focus();
+  } else if(e.key === 'Escape' && document.getElementById('view-detail').classList.contains('on')){
+    location.hash = '';
+  }
+});
+
+/* ---------- BOOT ---------- */
+document.getElementById('view-welcome').classList.add('on');
+</script>
+</body>
+</html>
