@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CMOD / iELAR Index Viewer &mdash; UBS</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+  :root{
+    --red:#e60000;
+    --bg:#ffffff;
+    --bg-soft:#fafafa;
+    --bg-hover:#f4f6f9;
+    --bg-active:#fff5d6;
+    --fg:#1a1a1a;
+    --fg-soft:#555555;
+    --fg-mute:#888888;
+    --line:#e4e4e4;
+    --head-bg:#f0f2f5;
+    --head-fg:#1a1a1a;
+    --head-line:#d8dde3;
+    --head-input-bg:rgba(0,0,0,0.06);
+    --head-input-focus:rgba(0,0,0,0.10);
+    --head-placeholder:rgba(0,0,0,0.40);
+    --overlay:rgba(0,0,0,0.45);
+  }
+  html[data-theme="dark"]{
+    --red:#ff5252;
+    --bg:#0e1116;
+    --bg-soft:#161a21;
+    --bg-hover:#1e242e;
+    --bg-active:#3a3220;
+    --fg:#e6e6e6;
+    --fg-soft:#a0a8b5;
+    --fg-mute:#6f7886;
+    --line:#262c36;
+    --head-bg:#1a1f27;
+    --head-fg:#e6e6e6;
+    --head-line:#2a323d;
+    --head-input-bg:rgba(255,255,255,0.10);
+    --head-input-focus:rgba(255,255,255,0.20);
+    --head-placeholder:rgba(255,255,255,0.40);
+    --overlay:rgba(0,0,0,0.65);
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%; overflow:hidden}
+  body{
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--fg); font-size:13px;
+    display:flex; flex-direction:column;
+  }
+  header{
+    background:var(--bg); border-bottom:1px solid var(--line);
+    padding:12px 18px; display:flex; align-items:center; gap:18px; flex-shrink:0;
+  }
+  .brand{display:flex; align-items:baseline; gap:12px}
+  .brand .logo{font-weight:700; color:var(--red); font-size:18px; letter-spacing:2px}
+  .brand h1{font-size:14px; font-weight:600}
+  .brand .sub{font-size:11px; color:var(--fg-mute); font-style:italic}
+  .right-tools{margin-left:auto; display:flex; align-items:center; gap:10px}
+  .btn{
+    border:1px solid var(--line); background:var(--bg); color:var(--fg);
+    padding:6px 13px; font-size:12px; font-weight:500; cursor:pointer;
+    border-radius:3px; font-family:inherit;
+  }
+  .btn:hover{background:var(--bg-hover); border-color:var(--fg-mute)}
+  .btn-red{background:var(--red); color:#fff; border-color:var(--red)}
+  .btn-red:hover{filter:brightness(1.1); background:var(--red)}
+  input[type=search],input[type=text]{
+    border:1px solid var(--line); padding:6px 10px; font-size:12px;
+    border-radius:3px; font-family:inherit; background:var(--bg); color:var(--fg);
+  }
+  input:focus{outline:none; border-color:var(--red)}
+  input[type=file]{display:none}
+  .theme-toggle{display:inline-flex; border:1px solid var(--line); border-radius:3px; overflow:hidden}
+  .theme-toggle button{
+    border:none; background:var(--bg); color:var(--fg-soft);
+    padding:6px 10px; font-size:11px; cursor:pointer; font-family:inherit;
+  }
+  .theme-toggle button.active{background:var(--fg); color:var(--bg)}
+
+  .view{display:none; flex:1; min-height:0; flex-direction:column}
+  .view.on{display:flex}
+
+  /* welcome */
+  .welcome{align-items:center; justify-content:center; gap:22px; padding:40px}
+  .welcome h2{font-size:22px; font-weight:300}
+  .welcome h2 b{color:var(--red); font-weight:600}
+  .welcome p{color:var(--fg-soft); max-width:640px; text-align:center; line-height:1.6}
+  .drop{
+    border:2px dashed var(--line); border-radius:8px; padding:36px 56px;
+    text-align:center; transition:border-color .2s, background .2s;
+  }
+  .drop.hot{border-color:var(--red); background:var(--bg-hover)}
+  .help{font-size:11px; color:var(--fg-mute); margin-top:10px; text-align:center; line-height:1.7}
+
+  /* toolbar */
+  .toolbar{
+    display:flex; align-items:center; gap:12px; padding:10px 18px;
+    border-bottom:1px solid var(--line); flex-shrink:0; flex-wrap:wrap;
+  }
+  .toolbar label{
+    font-size:11px; color:var(--fg-mute); font-weight:600;
+    letter-spacing:1px; text-transform:uppercase;
+  }
+  .group{display:flex; align-items:center; gap:8px}
+  .stat{font-size:12px; color:var(--fg-soft)}
+  .stat b{color:var(--fg); font-variant-numeric:tabular-nums}
+  .warn{
+    font-size:11px; color:#9a6b00; background:#fff7e0; border:1px solid #e6cd66;
+    padding:3px 9px; border-radius:3px;
+  }
+  html[data-theme="dark"] .warn{color:#e0b950; background:#2a2412; border-color:#5a4a1e}
+
+  /* grid */
+  .grid-wrap{flex:1; min-height:0; display:flex; flex-direction:column}
+  .grid-head{
+    display:flex; background:var(--head-bg); color:var(--head-fg);
+    font-size:11px; font-weight:600; flex-shrink:0;
+    overflow:hidden; user-select:none; border-bottom:1px solid var(--head-line);
+  }
+  .grid-head .cell{
+    padding:6px 8px; border-right:1px solid var(--head-line);
+    display:flex; flex-direction:column; gap:4px; flex-shrink:0;
+  }
+  .sort-trig{display:flex; align-items:center; gap:5px; cursor:pointer; white-space:nowrap}
+  .sort-trig:hover{color:var(--red)}
+  .sort-i{font-size:9px; opacity:.45}
+  .sort-trig.sorted{color:var(--red)}
+  .sort-trig.sorted .sort-i{opacity:1}
+  .col-filter{
+    border:none; background:var(--head-input-bg); color:var(--head-fg);
+    padding:3px 6px; font-size:11px; border-radius:2px; font-family:inherit; width:100%;
+  }
+  .col-filter::placeholder{color:var(--head-placeholder)}
+  .col-filter:focus{outline:none; background:var(--head-input-focus)}
+  .grid-body{flex:1; overflow:auto; position:relative}
+  .virtual-spacer{position:absolute; left:0; top:0; width:1px; pointer-events:none}
+  .virtual-row{
+    position:absolute; left:0; display:flex; align-items:center;
+    border-bottom:1px solid var(--line); font-size:12px; white-space:nowrap;
+  }
+  .virtual-row:nth-child(even){background:var(--bg-soft)}
+  .virtual-row:hover{background:var(--bg-hover) !important}
+  .virtual-row .cell{
+    padding:5px 8px; border-right:1px solid var(--line); flex-shrink:0;
+    overflow:hidden; text-overflow:ellipsis;
+  }
+  .cell.num{font-variant-numeric:tabular-nums}
+  .icon-btn{
+    border:1px solid var(--line); background:var(--bg); color:var(--fg-soft);
+    border-radius:3px; cursor:pointer; font-size:13px; line-height:1;
+    padding:3px 7px; font-family:inherit;
+  }
+  .icon-btn:hover{background:var(--red); color:#fff; border-color:var(--red)}
+
+  /* modal */
+  .modal-back{
+    display:none; position:fixed; inset:0; background:var(--overlay);
+    z-index:1000; align-items:flex-start; justify-content:center; padding:24px;
+    overflow:auto;
+  }
+  .modal-back.on{display:flex}
+  .modal{
+    background:var(--bg); border-radius:6px; width:100%; max-width:900px;
+    box-shadow:0 10px 40px rgba(0,0,0,.35); border:1px solid var(--line);
+  }
+  .modal-head{
+    padding:14px 20px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  }
+  .modal-head .ielar{font-weight:700; color:var(--red); letter-spacing:1px}
+  .modal-head h3{font-size:14px; font-weight:600}
+  .modal-head .x{margin-left:auto}
+  .modal-sub{
+    padding:10px 20px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    background:var(--bg-soft); font-size:12px;
+  }
+  .modal-body{padding:18px 20px}
+  .frm-row{
+    display:flex; align-items:center; gap:12px; margin-bottom:7px;
+  }
+  .frm-lbl{
+    width:250px; flex-shrink:0; text-align:right; font-size:12px; color:var(--fg-soft);
+  }
+  .frm-lbl .req{color:var(--red); margin-left:3px}
+  .frm-val{
+    flex:1; min-width:0; border:1px solid var(--line); border-radius:3px;
+    padding:6px 10px; font-size:12px; background:var(--bg-soft);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    cursor:pointer; font-family:ui-monospace,Consolas,monospace;
+  }
+  .frm-val:hover{border-color:var(--red)}
+  .frm-val.empty{color:var(--fg-mute); font-style:italic; font-family:inherit; cursor:default}
+  .frm-val.empty:hover{border-color:var(--line)}
+  .frm-val.copied{border-color:var(--red); background:var(--bg-active)}
+  .frm-note{
+    font-size:11px; color:var(--fg-mute); padding:0 20px 16px; line-height:1.6;
+  }
+  .modal-foot{
+    padding:12px 20px; border-top:1px solid var(--line);
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+  }
+  a.linkbtn{
+    border:1px solid var(--line); background:var(--bg); color:var(--fg);
+    padding:6px 13px; font-size:12px; border-radius:3px; text-decoration:none;
+    display:inline-block;
+  }
+  a.linkbtn:hover{background:var(--bg-hover); border-color:var(--red); color:var(--red)}
+  a.linkbtn.dis{opacity:.4; pointer-events:none}
+  .pill{
+    display:inline-block; padding:2px 8px; border-radius:10px;
+    font-size:10px; font-weight:600; border:1px solid var(--line); background:var(--bg-soft);
+  }
+  footer{
+    padding:6px 18px; border-top:1px solid var(--line); flex-shrink:0;
+    font-size:11px; color:var(--fg-mute); display:flex; gap:16px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">UBS</span>
+    <h1>CMOD / iELAR Index Viewer</h1>
+    <span class="sub" id="job-info"></span>
+  </div>
+  <div class="right-tools">
+    <label class="btn" for="file-idx" id="lbl-reload" style="display:none">Carica nuovo file&hellip;</label>
+    <div class="theme-toggle">
+      <button data-theme="auto" class="active">Auto</button>
+      <button data-theme="light">&#9788;</button>
+      <button data-theme="dark">&#9789;</button>
+    </div>
+  </div>
+</header>
+
+<div class="view welcome on" id="view-welcome">
+  <h2><b>Indice iELAR</b> &nbsp;&middot;&nbsp; ricerca metadati documenti</h2>
+  <p>Carica l'estrazione CSV di <code>OMNIA.ELARINDEX</code>. Il viewer indicizza i metadati
+     e, per ogni riga, mostra come impostare la ricerca sul Legal Archive iELAR.</p>
+  <div class="drop" id="drop-zone">
+    <label class="btn btn-red" for="file-idx">Scegli file CSV</label>
+    <input type="file" id="file-idx" accept=".csv,.txt,.tsv">
+    <div class="help">
+      oppure trascina qui il file<br>
+      i dati restano sul tuo PC, non vengono mai trasmessi
+    </div>
+  </div>
+  <div class="help" id="load-progress"></div>
+</div>
+
+<div class="view" id="view-grid">
+  <div class="toolbar">
+    <div class="group">
+      <label>Ricerca</label>
+      <input type="search" id="q" placeholder="Cerca in tutte le colonne, poi Invio&hellip;" style="width:320px">
+      <button class="btn btn-red" id="btn-q">&#128269; Cerca</button>
+    </div>
+    <div class="group">
+      <button class="btn" id="btn-reset">Azzera filtri</button>
+      <button class="btn" id="btn-export">Esporta vista</button>
+    </div>
+    <div class="group" style="margin-left:auto">
+      <span class="warn" id="cap-warn" style="display:none"></span>
+      <span class="stat"><b id="st-shown">0</b> di <b id="st-total">0</b> record</span>
+    </div>
+  </div>
+  <div class="grid-wrap">
+    <div class="grid-head" id="head"></div>
+    <div class="grid-body" id="body">
+      <div class="virtual-spacer" id="spacer"></div>
+      <div id="viewport"></div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span>CMOD / iELAR Index Viewer &middot; i dati restano sul tuo PC &middot; UBS</span>
+  <span id="render-stats" style="margin-left:auto"></span>
+</footer>
+
+<div class="modal-back" id="modal-back">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="ielar">UBS iELAR</span>
+      <h3 id="m-title">&nbsp;</h3>
+      <span class="pill" id="m-pill">&nbsp;</span>
+      <button class="btn x" id="m-close">Chiudi &#10005;</button>
+    </div>
+    <div class="modal-sub">
+      <span style="color:var(--fg-mute)">Maschera:</span>
+      <button class="btn" id="m-f2633">Client/Customer docs</button>
+      <button class="btn" id="m-f2635">CLI contracts &amp; accounts</button>
+      <span style="color:var(--fg-mute); margin-left:auto">click su un valore per copiarlo</span>
+    </div>
+    <div class="modal-body" id="m-body"></div>
+    <div class="frm-note">
+      I campi contrassegnati con <span style="color:var(--red)">*</span> sono obbligatori nella
+      maschera iELAR: se in questa riga risultano vuoti, la ricerca va ristretta con gli altri criteri.
+      La data di creazione va inserita come intervallo: qui viene proposta la stessa data su entrambi i lati.
+    </div>
+    <div class="modal-foot">
+      <a class="linkbtn" id="m-open-ielar" target="_blank" rel="noopener">Apri maschera iELAR &#8599;</a>
+      <a class="linkbtn" id="m-open-doc" target="_blank" rel="noopener">Apri documento locale &#8599;</a>
+      <span class="stat" id="m-docpath" style="margin-left:auto; font-family:ui-monospace,Consolas,monospace; font-size:11px"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   NOTE UBS: mai usare la sequenza di escape letterale backslash-n
+   nelle stringhe JS. Alcuni filtri di rete aziendali la convertono
+   in un vero a capo e rompono il sorgente. Usare NL/CR runtime.
+   ============================================================ */
+var NL = String.fromCharCode(10);
+var CR = String.fromCharCode(13);
+
+/* ---------- URL delle due maschere iELAR ---------- */
+var IELAR_2633 = 'https://whs-shared.ubs.net/app/GSJ/#/search/parameters/2633';
+var IELAR_2635 = 'https://whs-shared.ubs.net/app/GSJ/#/search/parameters/2635';
+
+/* ---------- Colonne canoniche ---------- */
+var COLS = [
+  'ELAR_FAMILY','YEAR_DOC','CREATION_DATE','DOCUMENT_ORIGIN','RECORD_DESCRIPTION',
+  'RECORD_SUBTYPE','RECORD_TYPE','CUSTOMER_DESCRIPTION','TAX_CODE','CLIENT_ID',
+  'ALT_CLIENT_ID','CLIENT_ADVISOR','CASE_NUMBER','ACCOUNT_ID','PRODUCT',
+  'ADDITIONAL_INFO','RECORD_ID','FILE_NAME','RETENTION_SCHEDULE','RETENTION_TRIGGER',
+  'RETENTION_END_DATE','FILE_EXT','PAPER_BARCODE'
+];
+var HINTS = {
+  ELAR_FAMILY:         { label:'Elar Family',        w:170 },
+  YEAR_DOC:            { label:'Anno',               w:60  },
+  CREATION_DATE:       { label:'Creation Date',      w:110 },
+  DOCUMENT_ORIGIN:     { label:'Doc. Origin',        w:100 },
+  RECORD_DESCRIPTION:  { label:'Record Descr.',      w:190 },
+  RECORD_SUBTYPE:      { label:'Subtype',            w:180 },
+  RECORD_TYPE:         { label:'Doc. Type',          w:190 },
+  CUSTOMER_DESCRIPTION:{ label:'Customer Descr.',    w:210 },
+  TAX_CODE:            { label:'Tax Code / VAT',     w:150 },
+  CLIENT_ID:           { label:'Client ID',          w:90  },
+  ALT_CLIENT_ID:       { label:'Alt. Client ID',     w:100 },
+  CLIENT_ADVISOR:      { label:'Client Advisor',     w:220 },
+  CASE_NUMBER:         { label:'Case Number/ID',     w:120 },
+  ACCOUNT_ID:          { label:'Account ID',         w:100 },
+  PRODUCT:             { label:'Product',            w:110 },
+  ADDITIONAL_INFO:     { label:'Additional Info',    w:140 },
+  RECORD_ID:           { label:'RECORD_ID',          w:110 },
+  FILE_NAME:           { label:'File Name',          w:190 },
+  RETENTION_SCHEDULE:  { label:'Retention Sched.',   w:120 },
+  RETENTION_TRIGGER:   { label:'Retention Trigger',  w:150 },
+  RETENTION_END_DATE:  { label:'Retention End',      w:110 },
+  FILE_EXT:            { label:'Ext.',               w:60  },
+  PAPER_BARCODE:       { label:'Paper BARCODE',      w:130 }
+};
+
+/* Alias di intestazione: chiave = nome normalizzato (solo A-Z0-9) */
+var ALIASES = {
+  ELARFAMILY:'ELAR_FAMILY', FAMILY:'ELAR_FAMILY',
+  YEARDOC:'YEAR_DOC', ANNO:'YEAR_DOC',
+  CREATIONDATE:'CREATION_DATE', DATACREAZIONE:'CREATION_DATE',
+  DOCUMENTORIGIN:'DOCUMENT_ORIGIN', ORIGIN:'DOCUMENT_ORIGIN',
+  RECORDDESCRIPTION:'RECORD_DESCRIPTION', RECORDDESCR:'RECORD_DESCRIPTION',
+  RECORDDOCUMENTSUBTYPE:'RECORD_SUBTYPE', RECORDSUBTYPE:'RECORD_SUBTYPE',
+  RECORDDOCUMENTTYPE:'RECORD_TYPE', RECORDTYPE:'RECORD_TYPE',
+  CUSTOMERDESCRIPTION:'CUSTOMER_DESCRIPTION', CUSTOMERDESCR:'CUSTOMER_DESCRIPTION',
+  TSXCODEVATNUMBER:'TAX_CODE', TAXCODEVATNUMBER:'TAX_CODE', TAXCODE:'TAX_CODE',
+  CLIENTID:'CLIENT_ID',
+  ALTERNATIVECLIENTID:'ALT_CLIENT_ID', ALTCLIENTID:'ALT_CLIENT_ID',
+  CLIENTADVISOR:'CLIENT_ADVISOR',
+  CASENUMBERID:'CASE_NUMBER', CASENUMBER:'CASE_NUMBER', WKVIPRATCS:'CASE_NUMBER',
+  ACCOUNTID:'ACCOUNT_ID',
+  PRODUCT:'PRODUCT',
+  ADDITIONALINFO:'ADDITIONAL_INFO',
+  RECORDID:'RECORD_ID',
+  FILENAME:'FILE_NAME',
+  UBSRETENTIONSCHEDULE:'RETENTION_SCHEDULE', UBSRETENTIONCATEGORY:'RETENTION_SCHEDULE',
+  RETENTIONTRIGGER:'RETENTION_TRIGGER', TRIGGER:'RETENTION_TRIGGER',
+  RETENTIONENDDATE:'RETENTION_END_DATE', ENDDATE:'RETENTION_END_DATE',
+  FILEEXT:'FILE_EXT', DSAK:'FILE_EXT', EXT:'FILE_EXT',
+  PAPERBARCODE:'PAPER_BARCODE', BARCODE:'PAPER_BARCODE'
+};
+
+/* Colonne a bassa cardinalita': i valori vengono deduplicati (string interning)
+   per contenere la memoria su 4 milioni di righe. */
+var INTERN = {
+  ELAR_FAMILY:1, YEAR_DOC:1, CREATION_DATE:1, DOCUMENT_ORIGIN:1,
+  RECORD_DESCRIPTION:1, RECORD_SUBTYPE:1, RECORD_TYPE:1, CLIENT_ADVISOR:1,
+  PRODUCT:1, RETENTION_SCHEDULE:1, RETENTION_TRIGGER:1, RETENTION_END_DATE:1,
+  FILE_EXT:1, ADDITIONAL_INFO:1
+};
+
+var ROW_H = 28;
+var MAX_VIEW = 100000;   /* limite di righe mostrabili (altezza max del DOM) */
+
+var S = {
+  rows: [],        /* array di array, indicizzati da IDX */
+  view: [],        /* indici delle righe filtrate */
+  idx: {},         /* nome canonico -> posizione nella riga */
+  q: '',
+  colF: {},
+  sortCol: null,
+  sortDir: 'asc',
+  capped: false
+};
+
+/* ---------- utilita' ---------- */
+function esc(s){
+  if(s === null || s === undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function norm(h){ return String(h || '').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function get(row, col){
+  var i = S.idx[col];
+  return (i === undefined || row[i] === undefined) ? '' : row[i];
+}
+/* 2024-12-31 -> 31.12.2024 (formato della maschera iELAR) */
+function toIelarDate(s){
+  if(!s) return '';
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s).trim());
+  if(m) return m[3] + '.' + m[2] + '.' + m[1];
+  var m2 = /^(\d{2})[.\/](\d{2})[.\/](\d{4})/.exec(String(s).trim());
+  if(m2) return m2[1] + '.' + m2[2] + '.' + m2[3];
+  return String(s);
+}
+function setProgress(t){ document.getElementById('load-progress').textContent = t || ''; }
+
+/* ---------- tema ---------- */
+function applyTheme(mode){
+  var dark = (mode === 'dark') ||
+    (mode === 'auto' && window.matchMedia &&
+     window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  var bs = document.querySelectorAll('.theme-toggle button');
+  for(var i=0; i<bs.length; i++){
+    bs[i].classList.toggle('active', bs[i].dataset.theme === mode);
+  }
+}
+(function(){
+  var bs = document.querySelectorAll('.theme-toggle button');
+  for(var i=0; i<bs.length; i++){
+    bs[i].addEventListener('click', function(e){
+      var m = e.currentTarget.dataset.theme;
+      try { localStorage.setItem('ielar-idx-theme', m); } catch(err){}
+      applyTheme(m);
+    });
+  }
+  var saved = 'auto';
+  try { saved = localStorage.getItem('ielar-idx-theme') || 'auto'; } catch(err){}
+  applyTheme(saved);
+  if(window.matchMedia){
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(){
+      var cur = 'auto';
+      try { cur = localStorage.getItem('ielar-idx-theme') || 'auto'; } catch(err){}
+      if(cur === 'auto') applyTheme('auto');
+    });
+  }
+})();
+
+/* ---------- caricamento CSV ---------- */
+var dz = document.getElementById('drop-zone');
+['dragenter','dragover'].forEach(function(ev){
+  dz.addEventListener(ev, function(e){ e.preventDefault(); dz.classList.add('hot'); });
+});
+['dragleave','drop'].forEach(function(ev){
+  dz.addEventListener(ev, function(e){ e.preventDefault(); dz.classList.remove('hot'); });
+});
+dz.addEventListener('drop', function(e){
+  if(e.dataTransfer.files && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+document.getElementById('file-idx').addEventListener('change', function(e){
+  if(e.target.files[0]) loadFile(e.target.files[0]);
+});
+
+function loadFile(file){
+  setProgress('Lettura ' + file.name + ' (' + (file.size/1024/1024).toFixed(0) + ' MB)...');
+  var rows = [];
+  var headerDone = false;
+  var pools = {};          /* col -> Map valore->valore, per il string interning */
+  var internIdx = [];      /* posizioni da deduplicare */
+  var t0 = performance.now();
+  var nCols = 0;
+
+  Papa.parse(file, {
+    header: false,
+    skipEmptyLines: true,
+    delimiter: '',          /* auto-detect: gestisce sia ; sia , sia tab */
+    chunk: function(res){
+      var data = res.data, i0 = 0;
+      if(!headerDone){
+        var hdr = data[0] || [];
+        nCols = hdr.length;
+        for(var h=0; h<hdr.length; h++){
+          var n = norm(hdr[h]);
+          var canon = ALIASES[n] || (HINTS[n] ? n : null);
+          if(canon && S.idx[canon] === undefined) S.idx[canon] = h;
+        }
+        for(var c in INTERN){
+          if(S.idx[c] !== undefined){ internIdx.push(S.idx[c]); pools[S.idx[c]] = new Map(); }
+        }
+        headerDone = true;
+        i0 = 1;
+      }
+      for(var r=i0; r<data.length; r++){
+        var row = data[r];
+        if(row.length === 1 && !row[0]) continue;
+        for(var k=0; k<internIdx.length; k++){
+          var p = internIdx[k], v = row[p];
+          if(v === undefined) continue;
+          var hit = pools[p].get(v);
+          if(hit === undefined){ pools[p].set(v, v); } else { row[p] = hit; }
+        }
+        rows.push(row);
+      }
+      setProgress(rows.length.toLocaleString('it') + ' record letti...');
+    },
+    complete: function(){
+      S.rows = rows;
+      var found = 0; for(var c in S.idx) found++;
+      console.log('Parsing: ' + rows.length + ' righe, ' + found + '/' + COLS.length +
+                  ' colonne riconosciute, ' + (performance.now()-t0).toFixed(0) + 'ms');
+      setProgress('');
+      initApp(file.name, nCols, found);
+    },
+    error: function(err){
+      setProgress('Errore: ' + (err && err.message ? err.message : err));
+    }
+  });
+}
+
+var started = false;
+function initApp(fileName, nCols, nFound){
+  document.getElementById('view-welcome').classList.remove('on');
+  document.getElementById('view-grid').classList.add('on');
+  document.getElementById('lbl-reload').style.display = '';
+  document.getElementById('job-info').textContent =
+    S.rows.length.toLocaleString('it') + ' record  ·  ' + nFound + ' colonne riconosciute su ' + nCols;
+  if(!started){ buildHead(); wireGrid(); started = true; }
+  recompute();
+}
+
+/* ---------- intestazione griglia ---------- */
+function buildHead(){
+  var el = document.getElementById('head');
+  var html = '';
+  /* colonna azioni, fissa in testa */
+  html += '<div class="cell" style="width:52px">' +
+          '<div class="sort-trig" style="cursor:default"><span>iELAR</span></div>' +
+          '<div style="height:21px"></div></div>';
+  for(var i=0; i<COLS.length; i++){
+    var c = COLS[i];
+    if(S.idx[c] === undefined) continue;    /* colonna assente nel CSV */
+    var h = HINTS[c];
+    html += '<div class="cell" style="width:' + h.w + 'px">' +
+              '<div class="sort-trig" data-col="' + esc(c) + '" title="' + esc(c) + '">' +
+                '<span>' + esc(h.label) + '</span><span class="sort-i">&#8597;</span>' +
+              '</div>' +
+              '<input class="col-filter" data-col="' + esc(c) + '" placeholder="filtra...">' +
+            '</div>';
+  }
+  el.innerHTML = html;
+
+  var trigs = el.querySelectorAll('.sort-trig[data-col]');
+  for(var t=0; t<trigs.length; t++){
+    trigs[t].addEventListener('click', function(e){
+      var col = e.currentTarget.dataset.col;
+      if(S.sortCol === col) S.sortDir = (S.sortDir === 'asc') ? 'desc' : 'asc';
+      else { S.sortCol = col; S.sortDir = 'asc'; }
+      updateSortIcons();
+      recompute();
+    });
+  }
+  /* i filtri di colonna non sono istantanei: 4M righe */
+  var fs = el.querySelectorAll('.col-filter');
+  for(var f=0; f<fs.length; f++){
+    fs[f].addEventListener('keydown', function(e){
+      if(e.key !== 'Enter') return;
+      e.preventDefault();
+      applyColFilters();
+    });
+    fs[f].addEventListener('blur', applyColFilters);
+  }
+}
+function applyColFilters(){
+  var fs = document.querySelectorAll('#head .col-filter');
+  var next = {};
+  for(var i=0; i<fs.length; i++){
+    var v = fs[i].value.trim();
+    if(v) next[fs[i].dataset.col] = v.toLowerCase();
+  }
+  if(JSON.stringify(next) === JSON.stringify(S.colF)) return;
+  S.colF = next;
+  recompute();
+}
+function updateSortIcons(){
+  var ts = document.querySelectorAll('#head .sort-trig[data-col]');
+  for(var i=0; i<ts.length; i++){
+    var ind = ts[i].querySelector('.sort-i');
+    if(!ind) continue;
+    if(ts[i].dataset.col === S.sortCol){
+      ts[i].classList.add('sorted');
+      ind.textContent = (S.sortDir === 'asc') ? '\u2191' : '\u2193';
+    } else {
+      ts[i].classList.remove('sorted');
+      ind.textContent = '\u2195';
+    }
+  }
+}
+
+/* ---------- filtro / ordinamento ---------- */
+function recompute(){
+  var t0 = performance.now();
+  var q = S.q.toLowerCase();
+  var cf = [];
+  for(var c in S.colF){
+    if(S.idx[c] !== undefined) cf.push([S.idx[c], S.colF[c]]);
+  }
+  var out = [];
+  var rows = S.rows;
+  for(var i=0; i<rows.length; i++){
+    var row = rows[i], ok = true;
+    for(var k=0; k<cf.length; k++){
+      var v = row[cf[k][0]];
+      if(!v || String(v).toLowerCase().indexOf(cf[k][1]) < 0){ ok = false; break; }
+    }
+    if(ok && q){
+      ok = false;
+      for(var j=0; j<row.length; j++){
+        if(row[j] && String(row[j]).toLowerCase().indexOf(q) >= 0){ ok = true; break; }
+      }
+    }
+    if(ok) out.push(i);
+  }
+  if(S.sortCol !== null && S.idx[S.sortCol] !== undefined){
+    var p = S.idx[S.sortCol], dir = (S.sortDir === 'asc') ? 1 : -1;
+    out.sort(function(a,b){
+      var va = rows[a][p] || '', vb = rows[b][p] || '';
+      if(va === vb) return 0;
+      return (va > vb ? 1 : -1) * dir;
+    });
+  }
+  S.capped = out.length > MAX_VIEW;
+  S.view = S.capped ? out.slice(0, MAX_VIEW) : out;
+
+  document.getElementById('st-shown').textContent = out.length.toLocaleString('it');
+  document.getElementById('st-total').textContent = S.rows.length.toLocaleString('it');
+  var w = document.getElementById('cap-warn');
+  if(S.capped){
+    w.style.display = '';
+    w.textContent = 'mostrati i primi ' + MAX_VIEW.toLocaleString('it') + ' — affina i filtri';
+  } else {
+    w.style.display = 'none';
+  }
+  renderGrid();
+  document.getElementById('render-stats').textContent =
+    'filtro in ' + (performance.now()-t0).toFixed(0) + 'ms';
+}
+
+/* ---------- griglia virtuale ---------- */
+var bodyEl = document.getElementById('body');
+var spacer = document.getElementById('spacer');
+var vpEl   = document.getElementById('viewport');
+function wireGrid(){
+  bodyEl.addEventListener('scroll', function(){
+    document.getElementById('head').scrollLeft = bodyEl.scrollLeft;
+    renderVisible();
+  });
+  window.addEventListener('resize', renderVisible);
+}
+function renderGrid(){
+  spacer.style.height = (S.view.length * ROW_H) + 'px';
+  bodyEl.scrollTop = 0;
+  renderVisible();
+}
+function renderVisible(){
+  var top = bodyEl.scrollTop;
+  var h = bodyEl.clientHeight;
+  var start = Math.max(0, Math.floor(top / ROW_H) - 8);
+  var end = Math.min(S.view.length, Math.ceil((top + h) / ROW_H) + 8);
+  var cols = [];
+  for(var i=0; i<COLS.length; i++){ if(S.idx[COLS[i]] !== undefined) cols.push(COLS[i]); }
+  var totW = 52;
+  for(var w=0; w<cols.length; w++) totW += HINTS[cols[w]].w;
+
+  var html = '';
+  for(var r=start; r<end; r++){
+    var row = S.rows[S.view[r]];
+    html += '<div class="virtual-row" data-r="' + r + '" style="top:' + (r*ROW_H) +
+            'px; height:' + ROW_H + 'px; width:' + totW + 'px">';
+    html += '<div class="cell" style="width:52px; text-align:center">' +
+              '<button class="icon-btn" data-act="ielar" title="Come cercarlo su iELAR">&#128269;</button>' +
+            '</div>';
+    for(var c=0; c<cols.length; c++){
+      var col = cols[c];
+      html += '<div class="cell" style="width:' + HINTS[col].w + 'px">' +
+              esc(get(row, col)) + '</div>';
+    }
+    html += '</div>';
+  }
+  vpEl.innerHTML = html;
+  var rs = vpEl.querySelectorAll('.virtual-row');
+  for(var k=0; k<rs.length; k++){
+    rs[k].addEventListener('click', function(e){
+      var btn = e.target.closest('button[data-act]');
+      if(!btn) return;
+      var r = Number(e.currentTarget.dataset.r);
+      openIelarModal(S.rows[S.view[r]]);
+    });
+  }
+}
+
+/* ---------- ricerca globale (con tasto, non istantanea) ---------- */
+(function(){
+  var inp = document.getElementById('q');
+  function run(){
+    if(S.q === inp.value) return;
+    S.q = inp.value;
+    recompute();
+  }
+  inp.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); run(); }
+  });
+  inp.addEventListener('search', function(){ if(inp.value === '') run(); });
+  document.getElementById('btn-q').addEventListener('click', run);
+})();
+
+document.getElementById('btn-reset').addEventListener('click', function(){
+  S.q = ''; S.colF = {}; S.sortCol = null; S.sortDir = 'asc';
+  document.getElementById('q').value = '';
+  var fs = document.querySelectorAll('#head .col-filter');
+  for(var i=0; i<fs.length; i++) fs[i].value = '';
+  updateSortIcons();
+  recompute();
+});
+
+document.getElementById('btn-export').addEventListener('click', function(){
+  var cols = [];
+  for(var i=0; i<COLS.length; i++){ if(S.idx[COLS[i]] !== undefined) cols.push(COLS[i]); }
+  var lines = [cols.join(';')];
+  for(var r=0; r<S.view.length; r++){
+    var row = S.rows[S.view[r]], cells = [];
+    for(var c=0; c<cols.length; c++){
+      var v = get(row, cols[c]);
+      if(v.indexOf(';') >= 0 || v.indexOf('"') >= 0) v = '"' + v.replace(/"/g,'""') + '"';
+      cells.push(v);
+    }
+    lines.push(cells.join(';'));
+  }
+  var blob = new Blob([lines.join(NL)], {type:'text/csv;charset=utf-8;'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'ielar_index_view.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+/* ============================================================
+   MASCHERE iELAR
+   ============================================================ */
+var FORM_2633 = {
+  id: '2633',
+  title: 'Client/Customer docs',
+  url: IELAR_2633,
+  fields: [
+    { lbl:'Search Title',                       fixed:'My Search' },
+    { lbl:'Creation Date',                      key:'CREATION_DATE', req:true, date:true },
+    { lbl:'Record Description (Document Type)', key:'RECORD_DESCRIPTION', req:true },
+    { lbl:'Document Origin',                    key:'DOCUMENT_ORIGIN', req:true },
+    { lbl:'Record / Document Subtype',          key:'RECORD_SUBTYPE', req:true },
+    { lbl:'Record / Document Type',             key:'RECORD_TYPE', req:true },
+    { lbl:'Customer Description',               key:'CUSTOMER_DESCRIPTION', req:true },
+    { lbl:'Client ID',                          key:'CLIENT_ID', req:true },
+    { lbl:'Tax Code / Vat Number',              key:'TAX_CODE', req:true },
+    { lbl:'Alternative Client ID',              key:'ALT_CLIENT_ID' },
+    { lbl:'Client Advisor',                     key:'CLIENT_ADVISOR' },
+    { lbl:'Case Number / ID',                   key:'CASE_NUMBER' },
+    { lbl:'Additional Info',                    key:'ADDITIONAL_INFO' },
+    { lbl:'Record / Document Name',             key:'FILE_NAME' },
+    { lbl:'Sensitive Data',                     fixed:'' }
+  ]
+};
+var FORM_2635 = {
+  id: '2635',
+  title: 'CLI customer contracts & accounts docs',
+  url: IELAR_2635,
+  fields: [
+    { lbl:'Search Title',                       fixed:'My Search' },
+    { lbl:'Creation Date',                      key:'CREATION_DATE', req:true, date:true },
+    { lbl:'Record Description (Document Type)', key:'RECORD_DESCRIPTION', req:true },
+    { lbl:'Document Origin',                    key:'DOCUMENT_ORIGIN', req:true },
+    { lbl:'Record / Document Subtype',          key:'RECORD_SUBTYPE', req:true },
+    { lbl:'Record / Document Type',             key:'RECORD_TYPE', req:true },
+    { lbl:'Customer Description',               key:'CUSTOMER_DESCRIPTION', req:true },
+    { lbl:'Tax Code / Vat Number',              key:'TAX_CODE', req:true },
+    { lbl:'Client ID',                          key:'CLIENT_ID', req:true },
+    { lbl:'Account ID',                         key:'ACCOUNT_ID', req:true },
+    { lbl:'Product',                            key:'PRODUCT', req:true },
+    { lbl:'Alternative Client ID',              key:'ALT_CLIENT_ID' },
+    { lbl:'Alternative Account ID',             fixed:'' },
+    { lbl:'Client Advisor',                     key:'CLIENT_ADVISOR' },
+    { lbl:'Additional Info',                    key:'ADDITIONAL_INFO' },
+    { lbl:'File Name',                          key:'FILE_NAME' },
+    { lbl:'Sensitive Data',                     fixed:'' }
+  ]
+};
+
+/* La famiglia del record decide la maschera da proporre. */
+function formForRow(row){
+  var fam = norm(get(row, 'ELAR_FAMILY'));
+  if(fam.indexOf('CONTRACT') >= 0 || fam.indexOf('ACCOUNT') >= 0) return FORM_2635;
+  return FORM_2633;
+}
+
+var modalRow = null;
+function openIelarModal(row){
+  modalRow = row;
+  renderModal(formForRow(row));
+  document.getElementById('modal-back').classList.add('on');
+}
+function closeModal(){
+  document.getElementById('modal-back').classList.remove('on');
+  modalRow = null;
+}
+document.getElementById('m-close').addEventListener('click', closeModal);
+document.getElementById('modal-back').addEventListener('click', function(e){
+  if(e.target === e.currentTarget) closeModal();
+});
+document.addEventListener('keydown', function(e){
+  if(e.key === 'Escape') closeModal();
+});
+document.getElementById('m-f2633').addEventListener('click', function(){
+  if(modalRow) renderModal(FORM_2633);
+});
+document.getElementById('m-f2635').addEventListener('click', function(){
+  if(modalRow) renderModal(FORM_2635);
+});
+
+function renderModal(form){
+  var row = modalRow;
+  if(!row) return;
+  document.getElementById('m-title').textContent = form.title;
+  document.getElementById('m-pill').textContent = 'parameters/' + form.id;
+  document.getElementById('m-f2633').classList.toggle('btn-red', form.id === '2633');
+  document.getElementById('m-f2635').classList.toggle('btn-red', form.id === '2635');
+
+  var html = '';
+  for(var i=0; i<form.fields.length; i++){
+    var f = form.fields[i];
+    var val;
+    if(f.fixed !== undefined) val = f.fixed;
+    else {
+      val = get(row, f.key);
+      if(f.date) val = toIelarDate(val);
+    }
+    var isEmpty = !val;
+    var shown = isEmpty ? '(vuoto)' : val;
+    if(f.date && !isEmpty) shown = val + '   -   ' + val;
+    html += '<div class="frm-row">' +
+              '<div class="frm-lbl">' + esc(f.lbl) +
+                (f.req ? '<span class="req">*</span>' : '') + '</div>' +
+              '<div class="frm-val' + (isEmpty ? ' empty' : '') + '"' +
+                 (isEmpty ? '' : ' data-copy="' + esc(val) + '" title="click per copiare"') + '>' +
+                esc(shown) +
+              '</div>' +
+            '</div>';
+  }
+  var body = document.getElementById('m-body');
+  body.innerHTML = html;
+  var vals = body.querySelectorAll('.frm-val[data-copy]');
+  for(var v=0; v<vals.length; v++){
+    vals[v].addEventListener('click', function(e){
+      var el = e.currentTarget;
+      copyText(el.dataset.copy);
+      el.classList.add('copied');
+      setTimeout(function(){ el.classList.remove('copied'); }, 700);
+    });
+  }
+
+  document.getElementById('m-open-ielar').href = form.url;
+
+  /* documento in locale: <cartella del viewer>/<DSAK>/<FILE_NAME> */
+  var fname = get(row, 'FILE_NAME');
+  var ext = String(get(row, 'FILE_EXT') || '').trim().toUpperCase();
+  var link = document.getElementById('m-open-doc');
+  var pathEl = document.getElementById('m-docpath');
+  if(fname && ext){
+    var rel = encodeURIComponent(ext) + '/' + encodeURIComponent(fname);
+    link.href = rel;
+    link.classList.remove('dis');
+    pathEl.textContent = './' + ext + '/' + fname;
+  } else {
+    link.removeAttribute('href');
+    link.classList.add('dis');
+    pathEl.textContent = fname ? 'estensione (DSAK) non valorizzata' : 'nome file non valorizzato';
+  }
+}
+
+function copyText(t){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t);
+    return;
+  }
+  var ta = document.createElement('textarea');
+  ta.value = t;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch(err){}
+  document.body.removeChild(ta);
+}
+</script>
+</body>
+</html>
