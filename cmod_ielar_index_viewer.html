@@ -302,10 +302,13 @@
       I campi contrassegnati con <span style="color:var(--red)">*</span> sono obbligatori nella
       maschera iELAR: se in questa riga risultano vuoti, la ricerca va ristretta con gli altri criteri.
       La data di creazione va inserita come intervallo: qui viene proposta la stessa data su entrambi i lati.
+      <br><b>Copia script autofill</b> copia negli appunti uno script che compila la maschera da solo:
+      apri iELAR, premi F12, incollalo nella console e premi Invio.
     </div>
     <div class="modal-foot">
       <a class="linkbtn" id="m-open-ielar" target="_blank" rel="noopener">Apri maschera iELAR &#8599;</a>
       <a class="linkbtn" id="m-open-doc" target="_blank" rel="noopener">Apri documento locale &#8599;</a>
+      <button class="btn" id="m-copy-script" title="Copia lo script da incollare nella console (F12) della pagina iELAR">Copia script autofill</button>
       <span class="stat" id="m-docpath" style="margin-left:auto; font-family:ui-monospace,Consolas,monospace; font-size:11px"></span>
     </div>
   </div>
@@ -397,14 +400,21 @@ var INTERN = {
 var ROW_H = 28;
 var MAX_VIEW = 100000;   /* limite di righe mostrabili (altezza max del DOM) */
 
+/* Ordinamento "naturale": le righe vengono ordinate UNA VOLTA SOLA al
+   caricamento per data di creazione decrescente. Finche' l'utente resta su
+   questo criterio non serve riordinare a ogni filtro (su 4 milioni di righe
+   un sort costa secondi, il filtro invece preserva l'ordine). */
+var NATURAL = { col:'CREATION_DATE', dir:'desc' };
+
 var S = {
   rows: [],        /* array di array, indicizzati da IDX */
   view: [],        /* indici delle righe filtrate */
   idx: {},         /* nome canonico -> posizione nella riga */
   q: '',
   colF: {},
-  sortCol: null,
-  sortDir: 'asc',
+  sortCol: NATURAL.col,
+  sortDir: NATURAL.dir,
+  preSorted: false,
   capped: false
 };
 
@@ -524,8 +534,23 @@ function loadFile(file){
       var found = 0; for(var c in S.idx) found++;
       console.log('Parsing: ' + rows.length + ' righe, ' + found + '/' + COLS.length +
                   ' colonne riconosciute, ' + (performance.now()-t0).toFixed(0) + 'ms');
-      setProgress('');
-      initApp(file.name, nCols, found);
+      setProgress('Ordinamento per data di creazione...');
+      /* lascia ridisegnare il messaggio prima del sort, che blocca il thread */
+      setTimeout(function(){
+        var ci = S.idx['CREATION_DATE'];
+        if(ci !== undefined){
+          var t1 = performance.now();
+          rows.sort(function(a,b){
+            var va = a[ci] || '', vb = b[ci] || '';
+            if(va === vb) return 0;
+            return va > vb ? -1 : 1;      /* DESC */
+          });
+          S.preSorted = true;
+          console.log('Pre-sort CREATION_DATE desc in ' + (performance.now()-t1).toFixed(0) + 'ms');
+        }
+        setProgress('');
+        initApp(file.name, nCols, found);
+      }, 30);
     },
     error: function(err){
       setProgress('Errore: ' + (err && err.message ? err.message : err));
@@ -541,6 +566,7 @@ function initApp(fileName, nCols, nFound){
   document.getElementById('job-info').textContent =
     S.rows.length.toLocaleString('it') + ' record  ·  ' + nFound + ' colonne riconosciute su ' + nCols;
   if(!started){ buildHead(); wireGrid(); started = true; }
+  updateSortIcons();
   recompute();
 }
 
@@ -636,7 +662,8 @@ function recompute(){
     }
     if(ok) out.push(i);
   }
-  if(S.sortCol !== null && S.idx[S.sortCol] !== undefined){
+  var isNatural = S.preSorted && S.sortCol === NATURAL.col && S.sortDir === NATURAL.dir;
+  if(!isNatural && S.sortCol !== null && S.idx[S.sortCol] !== undefined){
     var p = S.idx[S.sortCol], dir = (S.sortDir === 'asc') ? 1 : -1;
     out.sort(function(a,b){
       var va = rows[a][p] || '', vb = rows[b][p] || '';
@@ -730,7 +757,7 @@ function renderVisible(){
 })();
 
 document.getElementById('btn-reset').addEventListener('click', function(){
-  S.q = ''; S.colF = {}; S.sortCol = null; S.sortDir = 'asc';
+  S.q = ''; S.colF = {}; S.sortCol = NATURAL.col; S.sortDir = NATURAL.dir;
   document.getElementById('q').value = '';
   var fs = document.querySelectorAll('#head .col-filter');
   for(var i=0; i<fs.length; i++) fs[i].value = '';
@@ -833,6 +860,15 @@ document.getElementById('modal-back').addEventListener('click', function(e){
 document.addEventListener('keydown', function(e){
   if(e.key === 'Escape') closeModal();
 });
+var currentForm = null;
+document.getElementById('m-copy-script').addEventListener('click', function(e){
+  if(!modalRow || !currentForm) return;
+  copyText(buildFillerScript(currentForm, modalRow));
+  var b = e.currentTarget, old = b.textContent;
+  b.textContent = 'Script copiato';
+  b.classList.add('btn-red');
+  setTimeout(function(){ b.textContent = old; b.classList.remove('btn-red'); }, 1200);
+});
 document.getElementById('m-f2633').addEventListener('click', function(){
   if(modalRow) renderModal(FORM_2633);
 });
@@ -843,6 +879,7 @@ document.getElementById('m-f2635').addEventListener('click', function(){
 function renderModal(form){
   var row = modalRow;
   if(!row) return;
+  currentForm = form;
   document.getElementById('m-title').textContent = form.title;
   document.getElementById('m-pill').textContent = 'parameters/' + form.id;
   document.getElementById('m-f2633').classList.toggle('btn-red', form.id === '2633');
@@ -898,6 +935,72 @@ function renderModal(form){
     link.classList.add('dis');
     pathEl.textContent = fname ? 'estensione (DSAK) non valorizzata' : 'nome file non valorizzato';
   }
+}
+
+/* ------------------------------------------------------------
+   Script di compilazione automatica della maschera iELAR.
+   Questa pagina NON puo' scrivere dentro whs-shared.ubs.net: e' un'altra
+   origine e il browser lo impedisce. Lo script qui sotto va incollato nella
+   console (F12) della pagina iELAR gia' aperta: trova gli input in base al
+   testo dell'etichetta e li valorizza passando dal setter nativo, altrimenti
+   React non registra la modifica.
+   ------------------------------------------------------------ */
+function buildFillerScript(form, row){
+  var pairs = [];
+  for(var i=0; i<form.fields.length; i++){
+    var f = form.fields[i], val;
+    if(f.fixed !== undefined) val = f.fixed;
+    else {
+      val = get(row, f.key);
+      if(f.date) val = toIelarDate(val);
+    }
+    if(!val) continue;
+    pairs.push({ label:f.lbl, value:val, date: f.date ? 1 : 0 });
+  }
+  var L = [
+    '/* iELAR autofill - ' + form.title + ' (parameters/' + form.id + ') */',
+    '(function(){',
+    '  var DATA = ' + JSON.stringify(pairs) + ';',
+    '  function nativeSet(el, v){',
+    '    var proto = (el.tagName === "TEXTAREA") ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;',
+    '    var d = Object.getOwnPropertyDescriptor(proto, "value");',
+    '    if(d && d.set) d.set.call(el, v); else el.value = v;',
+    '    el.dispatchEvent(new Event("input",  { bubbles:true }));',
+    '    el.dispatchEvent(new Event("change", { bubbles:true }));',
+    '  }',
+    '  function nrm(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g, ""); }',
+    '  function inputsFor(label){',
+    '    var want = nrm(label);',
+    '    var nodes = document.querySelectorAll("label, span, div, td, th, p");',
+    '    for(var i=0; i<nodes.length; i++){',
+    '      var n = nodes[i];',
+    '      if(n.children.length > 3) continue;',
+    '      if(nrm(n.textContent) !== want) continue;',
+    '      /* si parte dal nodo stesso e si risale il minimo indispensabile. */',
+    '      var scope = n, hops = 0;',
+    '      while(scope && hops < 5){',
+    '        var f = scope.querySelectorAll("input:not([type=hidden]):not([type=checkbox]), textarea");',
+    '        /* piu di 3 input = siamo risaliti oltre la riga, in un contenitore',
+    '           che raccoglie piu campi: meglio scartare che scrivere nel posto sbagliato. */',
+    '        if(f.length > 3) break;',
+    '        if(f.length) return Array.prototype.slice.call(f);',
+    '        scope = scope.parentElement; hops++;',
+    '      }',
+    '    }',
+    '    return [];',
+    '  }',
+    '  var ok = 0, ko = [];',
+    '  for(var i=0; i<DATA.length; i++){',
+    '    var d = DATA[i], els = inputsFor(d.label);',
+    '    if(!els.length){ ko.push(d.label); continue; }',
+    '    if(d.date && els.length >= 2){ nativeSet(els[0], d.value); nativeSet(els[1], d.value); }',
+    '    else nativeSet(els[0], d.value);',
+    '    ok++;',
+    '  }',
+    '  console.log("iELAR autofill: " + ok + " campi compilati" + (ko.length ? ", NON trovati: " + ko.join(" | ") : ""));',
+    '})();'
+  ];
+  return L.join(NL);
 }
 
 function copyText(t){
