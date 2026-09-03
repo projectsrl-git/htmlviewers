@@ -1,5 +1,14 @@
-FTPS.exe -quiterror -z -a -e:on -user:S210967 -pfxfile:"..." -pfxpwfile:"..." ftps-rz2.csintra.net 2121
+Dear Carina,
 
-ftp> ascii
-ftp> quote SITE CY PRI=2500 SEC=250 DSNTYPE=LARGE UCOUNT=4 RECFM=VB LRECL=30000 SBDATACONN=(IBM-500,ISO8859-1) MGMTCLAS=COM#E035
-ftp> put "G:\ELAR\OUT\...\RZ2.ELA.FTP.CLICT@DT.D26237.INDX.C234511" 'DOC.RZ2.ELA.FTP.CLICT@DT.D26237.INDX.C234511'
+thank you so much for these words. They truly mean a lot to me.
+
+I have to disagree with you on just one thing: I cannot perform miracles, and I certainly don’t have any special ability to do so. What happens is much simpler — you have this extraordinary ability to motivate me not to know where my limits are. And when I don’t know them, somehow I start believing that I can do what initially seemed impossible.
+
+There is an old, wonderfully inaccurate saying about the bumblebee: “According to the laws of aerodynamics, given the size of its wings in relation to its weight, the bumblebee should not be able to fly. But the bumblebee doesn’t know that — so it flies anyway.”
+
+I think you sometimes have exactly this effect on me: you make me forget that something is supposed to be impossible, so I simply start working on making it happen.
+
+Thank you for your trust, your support, and for always giving me one more reason to try to fly.
+
+Grazie mille, Carina.
+Fabiano
