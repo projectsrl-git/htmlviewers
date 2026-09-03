@@ -1,14 +1,26 @@
-Dear Carina,
+Sì. **Così funziona molto bene**: è personale, calorosa, riconoscente e allo stesso tempo rimane assolutamente adatta a un contesto professionale. E mi piace molto che tu abbia esteso il ringraziamento anche a Olga e Manfred: evita che la risposta sembri concentrata solo sul complimento personale di Carina e restituisce l'idea del team.
 
-thank you so much for these words. They truly mean a lot to me.
+Farei solo **tre piccolissimi ritocchi di inglese**, senza cambiare il tuo tono:
 
-I have to disagree with you on just one thing: I cannot perform miracles, and I certainly don’t have any special ability to do so. What happens is much simpler — you have this extraordinary ability to motivate me not to know where my limits are. And when I don’t know them, somehow I start believing that I can do what initially seemed impossible.
+* `mood` → **atmosphere**, più naturale parlando dell'ambiente creato in un team.
+* `so that they don't really know where their limits are` → **to the point that they forget where their limits are**: è più elegante e rende meglio quello che vuoi dire.
+* Introdurrei il calabrone come **“an old saying”**, perché scientificamente la storia non è vera alla lettera; così resta perfettamente valida come metafora.
 
-There is an old, wonderfully inaccurate saying about the bumblebee: “According to the laws of aerodynamics, given the size of its wings in relation to its weight, the bumblebee should not be able to fly. But the bumblebee doesn’t know that — so it flies anyway.”
+La manderei così:
 
-I think you sometimes have exactly this effect on me: you make me forget that something is supposed to be impossible, so I simply start working on making it happen.
+> Thank you so much, Carina, for these words that truly mean a lot to me.
+> And thank you, Olga, for your daily, unwavering support. When I say I would jump into the fire for you, I really mean it.
+> And thank you, Manfred, because the environment, motivation, and atmosphere you've always created in the team make everything possible.
+>
+> Dear Carina, I have to disagree with you on just one thing: I cannot perform miracles, and I certainly don't have any special ability to do so. What happens is much simpler: **you have this extraordinary ability to motivate people to the point that they forget where their limits are.**
+>
+> There is an old saying about the bumblebee: *“According to the laws of aerodynamics, given the size of its wings in relation to its weight, the bumblebee should not be able to fly. But the bumblebee doesn't know that, so it flies anyway.”*
+>
+> **Thank you for your trust, your support, and for always giving me one more reason to try to fly.**
+>
+> Grazie mille,
+> Fabiano
 
-Thank you for your trust, your support, and for always giving me one more reason to try to fly.
+E soprattutto **terrei assolutamente l'ultima frase**. “*giving me one more reason to try to fly*” chiude il cerchio con il calabrone senza risultare melensa. È probabilmente la parte più bella della risposta.
 
-Grazie mille, Carina.
-Fabiano
+Anche il passaggio a Olga — *“when I say I would jump into the fire for you…”* — ha carattere. Considerando il tono molto umano della mail originale, io **non lo renderei più corporate**: perderebbe autenticità.
