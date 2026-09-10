@@ -1,8 +1,15 @@
 -- Operazioni per CODICE_ISIN + CLIENTE_INTESTATARIO_XF che, partendo da saldo 0,
 -- riportano il saldo progressivo a 0 entro il 31/08/2016.
 -- Restituisce tutte le operazioni fino all'ULTIMO azzeramento avvenuto entro la data.
+--
+-- NB: MOVIMENTI_TITOLI_EOR e' una CTE. Un solo WITH per statement:
+--     incollare questo blocco SUBITO DOPO la ")" che chiude MOVIMENTI_TITOLI_EOR,
+--     sostituendo la SELECT finale esistente.
 
-WITH mov AS (
+WITH MOVIMENTI_TITOLI_EOR AS (
+    /* ... definizione esistente ... */
+),
+mov AS (
     SELECT m.NUMERO_OPERAZIONE,
            m.CODICE_ISIN,
            m.SEGNO_OPERAZIONE,
